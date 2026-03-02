@@ -1,0 +1,50 @@
+1. Bloc Synthèse : Passer de la théorie à la pratique tabulaire
+Ce que tu dois regarder en priorité :
+
+Les CTGAN (Conditional Tabular GAN) : C'est la référence actuelle pour les données mixtes (continues + catégorielles).
+
+Les TabDDPM (Diffusion Models for Tabular Data) : C'est la pointe de la recherche (2023-2024), souvent plus stables que les GAN.
+
+Pourquoi ? Contrairement aux images, les données bancaires ont des distributions très hétérogènes (beaucoup de zéros, des queues de distribution longues pour les revenus, des variables catégorielles avec des milliers de modalités). Tu dois comprendre comment ces modèles gèrent ces spécificités.
+
+2. Bloc Confidentialité : L'exigence de l'Audit
+En Inspection Générale, la sécurité des données est une obsession.
+Ce que tu dois regarder :
+
+La Differential Privacy (DP) : C'est le standard mathématique pour garantir qu'on ne peut pas ré-identifier un individu.
+
+Les attaques d'inférence (Membership Inference Attacks) : Comprendre comment un hacker pourrait deviner si un client réel était dans la base d'entraînement.
+
+Pourquoi ? Ton code doit être "Privacy-by-design". Si tu prouves que ta méthode de synthèse respecte la Differential Privacy, tu gagnes une crédibilité énorme auprès des auditeurs sécurité du Crédit Agricole.
+
+3. Bloc Évaluation : Prouver que tes données "mentent bien"
+Ce que tu dois regarder :
+
+Fidélité Statistique : Comparaison des matrices de corrélation (Pearson/Spearman) entre réel et synthétique.
+
+Utility (Utilité métier) : La méthode TSTR (Train on Synthetic, Test on Real). Si tu entraînes un modèle de scoring sur tes données synthétiques et qu'il performe bien sur les vraies données du LCL, alors ta synthèse est réussie.
+
+Pourquoi ? C'est l'étape de validation. Un inspecteur te demandera : "Comment me prouvez-vous que votre base fictive est représentative du risque réel du LCL ?". Tu dois avoir les indicateurs prêts.
+
+4. Bloc XAI (Explainable AI) : Le cœur du métier d'auditeur
+C'est ici que ton master en économétrie brille.
+Ce que tu dois regarder :
+
+SHAP (Shapley Additive Explanations) : Basé sur la théorie des jeux. C'est le standard pour l'explicabilité globale et locale.
+
+LIME : Pour l'explication locale (pourquoi CE dossier a été refusé).
+
+Les courbes de dépendance partielle (PDP) : Pour voir l'effet d'une variable (ex: l'âge) sur le score.
+
+Pourquoi ? En banque, un modèle "boîte noire" est interdit pour le crédit (loi sur la protection des consommateurs). Tu dois pouvoir expliquer au client pourquoi son crédit est refusé. L'audit consiste à vérifier que l'explication est cohérente et non discriminatoire.
+
+Comment intégrer tout cela (Ta stratégie de rédaction)
+Je te conseille de structurer ta bibliographie comme un entonnoir :
+
+Le Contexte Régulateur : Commence par citer les attentes de l'ACPR (Autorité de Contrôle Prudentiel et de Résolution) ou de l'EBA sur l'usage de l'IA et la protection des données. Cela montre que tu comprends les enjeux business du Crédit Agricole.
+
+La Problématique Technique : Pourquoi l'anonymisation classique (suppression des noms) ne suffit pas et pourquoi la synthèse (deep learning) est la solution.
+
+L'État de l'Art : Présente les modèles (CTGAN, VAE, etc.) en comparant leurs avantages/inconvénients pour des données de scoring.
+
+La Synthèse Personnelle : Conclure en disant : "Au vu de la littérature, je vais tester le modèle X avec l'approche de validation Y, car c'est celle qui offre le meilleur compromis entre fidélité des données et protection de la vie privée."
