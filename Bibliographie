@@ -1,1 +1,1084 @@
+Méthodo G- CTGAN TVAE 
+
+pip install sdv pandas matplotlib seaborn scikit-learn
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sdv.metadata import SingleTableMetadata
+from sdv.single_table import CTGANSynthesizer, TVAESynthesizer
+from sdv.evaluation.single_table import evaluate_quality, run_diagnostic
+from sklearn.model_selection import train_test_split
+
+# 1. CHARGEMENT ET NETTOYAGE RAPIDE
+# ---------------------------------------------------------
+print("Chargement des données...")
+df = pd.read_csv('application_train.csv')
+
+# Pour le prototype, on peut échantillonner pour gagner du temps de calcul
+# Supprimez cette ligne pour l'entraînement final sur toute la base
+df_sample = df.sample(n=5000, random_state=42) 
+
+# Gestion basique des colonnes ID (à ne pas synthétiser comme des variables explicatives)
+df_sample = df_sample.drop(columns=['SK_ID_CURR'])
+
+# 2. CRÉATION DES MÉTADONNÉES
+# ---------------------------------------------------------
+# SDV a besoin de comprendre le schéma (catégoriel vs numérique)
+metadata = SingleTableMetadata()
+metadata.detect_from_dataframe(data=df_sample)
+
+# Optionnel : Forcer le type de TARGET en catégoriel pour que le GAN respecte les classes
+metadata.update_column(column_name='TARGET', sdtype='categorical')
+
+print("Métadonnées détectées avec succès.")
+
+# 3. ENTRAÎNEMENT DU MODÈLE CTGAN
+# ---------------------------------------------------------
+print("\n--- Entraînement CTGAN ---")
+# On définit le synthétiseur
+synthesizer_ctgan = CTGANSynthesizer(
+    metadata,
+    enforce_rounding=False,
+    epochs=100, # Augmenter à 300+ pour une meilleure convergence
+    verbose=True
+)
+
+synthesizer_ctgan.fit(df_sample)
+
+# Génération de données synthétiques CTGAN
+synthetic_data_ctgan = synthesizer_ctgan.sample(num_rows=len(df_sample))
+
+# 4. ENTRAÎNEMENT DU MODÈLE TVAE
+# ---------------------------------------------------------
+print("\n--- Entraînement TVAE ---")
+synthesizer_tvae = TVAESynthesizer(
+    metadata,
+    enforce_min_max_values=True,
+    epochs=100
+)
+
+synthesizer_tvae.fit(df_sample)
+
+# Génération de données synthétiques TVAE
+synthetic_data_tvae = synthesizer_tvae.sample(num_rows=len(df_sample))
+
+# 5. ÉVALUATION STATISTIQUE INITIALE
+# ---------------------------------------------------------
+print("\n--- Évaluation de la Fidélité ---")
+
+quality_report_ctgan = evaluate_quality(
+    real_data=df_sample,
+    synthetic_data=synthetic_data_ctgan,
+    metadata=metadata
+)
+
+print(f"Score de qualité global CTGAN : {quality_report_ctgan.get_score():.2%}")
+
+# 6. VISUALISATION DES DISTRIBUTIONS (Exemple sur 2 variables clés)
+# ---------------------------------------------------------
+def plot_comparison(real, synth, col_name, title):
+    plt.figure(figsize=(10, 4))
+    plt.subplot(1, 2, 1)
+    sns.histplot(real[col_name], kde=True, color='blue', label='Réel')
+    sns.histplot(synth[col_name], kde=True, color='red', label='Synthétique')
+    plt.title(f"Distribution: {col_name} ({title})")
+    plt.legend()
+    plt.show()
+
+# Comparaison sur le montant du crédit et l'âge (DAYS_BIRTH)
+plot_comparison(df_sample, synthetic_data_ctgan, 'AMT_CREDIT', 'CTGAN')
+plot_comparison(df_sample, synthetic_data_tvae, 'DAYS_BIRTH', 'TVAE')
+
+# 7. SAUVEGARDE DES MODÈLES ET DES DONNÉES
+# ---------------------------------------------------------
+synthetic_data_ctgan.to_csv('home_credit_synthetic_ctgan.csv', index=False)
+synthetic_data_tvae.to_csv('home_credit_synthetic_tvae.csv', index=False)
+synthesizer_ctgan.save('ctgan_model.pkl')
+
+print("\nPartie 1 terminée : Données synthétiques générées et sauvegardées.")
+
+
+
+import pandas as pd
+import numpy as np
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import roc_auc_score, roc_curve
+from sklearn.neighbors import NearestNeighbors
+from sklearn.preprocessing import StandardScaler
+import matplotlib.pyplot as plt
+
+# --- PREPARATION DES DONNÉES ---
+# On prend un échantillon égal de réelles et synthétiques pour l'équilibre
+n_samples = min(len(df_sample), len(synthetic_data_ctgan))
+real_test = df_sample.sample(n_samples, random_state=42).copy()
+synth_test = synthetic_data_ctgan.sample(n_samples, random_state=42).copy()
+
+# Labeling : 0 pour Réel, 1 pour Synthétique
+real_test['is_synthetic'] = 0
+synth_test['is_synthetic'] = 1
+
+# Fusion et encodage rapide pour le modèle adverse
+combined = pd.concat([real_test, synth_test], axis=0)
+combined_encoded = pd.get_dummies(combined.drop(columns=['TARGET']), drop_first=True)
+combined_encoded = combined_encoded.fillna(0) # Gestion simple des NaNs pour le test
+
+X = combined_encoded.drop(columns=['is_synthetic'])
+y = combined_encoded['is_synthetic']
+
+# 1. MÉCANISME DE DÉTECTION ADVERSE (Indistinguabilité)
+# ---------------------------------------------------------
+print("--- Test de Détection Adverse ---")
+clf = RandomForestClassifier(n_estimators=100, max_depth=5, random_state=42)
+clf.fit(X, y)
+probs = clf.predict_proba(X)[:, 1]
+auc_adverse = roc_auc_score(y, probs)
+
+print(f"AUC du Détecteur : {auc_adverse:.3f}")
+if auc_adverse < 0.6:
+    print("Résultat : EXCELLENT. Les données sont quasiment indiscernables (AUC proche de 0.5).")
+elif auc_adverse < 0.8:
+    print("Résultat : CORRECT. Le modèle distingue certaines différences mais la synthèse est globalement bonne.")
+else:
+    print("Résultat : ALERTE. Le modèle distingue trop facilement le vrai du faux (risque de sur-apprentissage).")
+
+# 2. MESURE DE SIMILARITÉ (Risque de copie / Distance)
+# ---------------------------------------------------------
+print("\n--- Analyse de la Distance au plus proche voisin ---")
+
+# Normalisation pour que la distance euclidienne ait du sens
+scaler = StandardScaler()
+X_real_scaled = scaler.fit_transform(combined_encoded[combined_encoded['is_synthetic'] == 0].drop(columns=['is_synthetic']))
+X_synth_scaled = scaler.transform(combined_encoded[combined_encoded['is_synthetic'] == 1].drop(columns=['is_synthetic']))
+
+# On cherche pour chaque ligne synthétique son "jumeau" réel le plus proche
+nn = NearestNeighbors(n_neighbors=1)
+nn.fit(X_real_scaled)
+distances, indices = nn.kneighbors(X_synth_scaled)
+
+plt.figure(figsize=(8, 5))
+plt.hist(distances, bins=50, color='skyblue', edgecolor='black')
+plt.axvline(np.percentile(distances, 5), color='red', linestyle='--', label='5ème percentile (Alerte Proximité)')
+plt.title("Distribution des distances minimales (Synthétique -> Réel)")
+plt.xlabel("Distance Euclidienne")
+plt.ylabel("Nombre de clients synthétiques")
+plt.legend()
+plt.show()
+
+print(f"Distance moyenne au plus proche voisin : {np.mean(distances):.2f}")
+
+
+
+
+
+
+
+
+
+---------------------------------------------------------------------------------
+
+
+
+Methodo CL
+
+---
+
+## Cellule 1 — Imports & Configuration
+
+```python
+import os
+import warnings
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from tqdm import tqdm
+import joblib
+import json
+
+warnings.filterwarnings("ignore")
+np.random.seed(42)
+
+plt.rcParams["figure.figsize"] = (12, 5)
+plt.rcParams["axes.spines.top"] = False
+plt.rcParams["axes.spines.right"] = False
+sns.set_palette("husl")
+
+print("✅ Imports OK")
+```
+
+---
+
+## Cellule 2 — Chargement des données
+
+```python
+# ⚠️ Modifie ce chemin
+DATA_PATH = "./application_train.csv"
+
+df_raw = pd.read_csv(DATA_PATH)
+
+print(f"Shape brut : {df_raw.shape}")
+print(f"Taux de défaut (TARGET=1) : {df_raw['TARGET'].mean():.3f}")
+print(f"\nTypes de colonnes :\n{df_raw.dtypes.value_counts()}")
+print(f"\nValeurs manquantes (top 10) :")
+print(df_raw.isnull().mean().sort_values(ascending=False).head(10))
+```
+
+---
+
+## Cellule 3 — Prétraitement
+
+```python
+def preprocess(df, max_missing_rate=0.40, n_sample=30_000):
+    df = df.copy()
+
+    # Suppression identifiant
+    if "SK_ID_CURR" in df.columns:
+        df = df.drop(columns=["SK_ID_CURR"])
+
+    # Suppression colonnes trop lacunaires
+    miss_rate = df.isnull().mean()
+    cols_to_keep = miss_rate[miss_rate <= max_missing_rate].index.tolist()
+    df = df[cols_to_keep]
+    print(f"Colonnes conservées : {len(cols_to_keep)}")
+
+    num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+    cat_cols = df.select_dtypes(include=["object"]).columns.tolist()
+
+    # Imputation
+    for c in num_cols:
+        df[c] = df[c].fillna(df[c].median())
+    for c in cat_cols:
+        df[c] = df[c].fillna(df[c].mode()[0])
+
+    # Conversion catégorielles en str pour SDV
+    df[cat_cols] = df[cat_cols].astype(str)
+
+    # Échantillonnage stratifié sur TARGET
+    df = (df.groupby("TARGET", group_keys=False)
+            .apply(lambda x: x.sample(min(len(x), n_sample // 2), random_state=42)))
+    df = df.reset_index(drop=True)
+
+    print(f"Shape final : {df.shape}")
+    print(f"Taux de défaut : {df['TARGET'].mean():.3f}")
+    return df, num_cols, cat_cols
+
+
+df, num_cols, cat_cols = preprocess(df_raw, n_sample=30_000)
+df.to_parquet("df_preprocessed.parquet", index=False)
+print("✅ Base prétraitée sauvegardée")
+```
+
+---
+
+## Cellule 4 — Visualisations de référence
+
+```python
+# Histogrammes
+fig, axes = plt.subplots(2, 4, figsize=(16, 7))
+sample_nums = [c for c in num_cols if c != "TARGET"][:8]
+
+for ax, col in zip(axes.flatten(), sample_nums):
+    df[col].hist(bins=40, ax=ax, color="steelblue", edgecolor="white")
+    ax.set_title(col, fontsize=9)
+
+plt.suptitle("Distributions — Base réelle (référence)", fontsize=13)
+plt.tight_layout()
+plt.savefig("ref_distributions.png", dpi=120)
+plt.show()
+
+# Heatmap corrélations
+key_nums = ["AMT_CREDIT", "AMT_INCOME_TOTAL", "DAYS_BIRTH",
+            "DAYS_EMPLOYED", "AMT_ANNUITY"]
+key_nums = [c for c in key_nums if c in df.columns]
+
+corr_real = df[key_nums + ["TARGET"]].corr()
+plt.figure(figsize=(10, 7))
+sns.heatmap(corr_real, annot=True, fmt=".2f", cmap="coolwarm",
+            center=0, linewidths=0.3)
+plt.title("Matrice de corrélation — Base réelle")
+plt.tight_layout()
+plt.savefig("corr_real.png", dpi=120)
+plt.show()
+
+print("✅ Visualisations OK")
+```
+
+---
+
+## Cellule 5 — Modèle Bayésien (baseline)
+
+```python
+from sdv.single_table import BayesianNetworkSynthesizer
+from sdv.metadata import SingleTableMetadata
+
+def build_metadata(df):
+    metadata = SingleTableMetadata()
+    metadata.detect_from_dataframe(df)
+    metadata.update_column(column_name="TARGET", sdtype="categorical")
+    return metadata
+
+metadata = build_metadata(df)
+
+print("⏳ Entraînement du modèle Bayésien...")
+bn_synth = BayesianNetworkSynthesizer(metadata)
+bn_synth.fit(df)
+
+df_bn = bn_synth.sample(num_rows=len(df))
+df_bn.to_parquet("df_synthetic_bayesian.parquet", index=False)
+print(f"✅ Bayésien OK — Shape : {df_bn.shape}")
+print(f"Taux de défaut : {df_bn['TARGET'].value_counts(normalize=True).to_dict()}")
+```
+
+---
+
+## Cellule 6 — CTGAN
+
+```python
+from sdv.single_table import CTGANSynthesizer
+
+print("⏳ Entraînement CTGAN (5–15 min)...")
+ctgan_synth = CTGANSynthesizer(
+    metadata,
+    epochs=150,
+    batch_size=500,
+    verbose=True,
+    cuda=False   # → True si GPU disponible
+)
+ctgan_synth.fit(df)
+
+df_ctgan = ctgan_synth.sample(num_rows=len(df))
+df_ctgan.to_parquet("df_synthetic_ctgan.parquet", index=False)
+print(f"✅ CTGAN OK — Shape : {df_ctgan.shape}")
+print(f"Taux de défaut : {df_ctgan['TARGET'].value_counts(normalize=True).to_dict()}")
+```
+
+---
+
+## Cellule 7 — TVAE
+
+```python
+from sdv.single_table import TVAESynthesizer
+
+print("⏳ Entraînement TVAE...")
+tvae_synth = TVAESynthesizer(
+    metadata,
+    epochs=150,
+    batch_size=500,
+    cuda=False
+)
+tvae_synth.fit(df)
+
+df_tvae = tvae_synth.sample(num_rows=len(df))
+df_tvae.to_parquet("df_synthetic_tvae.parquet", index=False)
+print(f"✅ TVAE OK — Shape : {df_tvae.shape}")
+print(f"Taux de défaut : {df_tvae['TARGET'].value_counts(normalize=True).to_dict()}")
+```
+
+---
+
+## Cellule 8 — Évaluation qualité (SDMetrics)
+
+```python
+from sdmetrics.reports.single_table import QualityReport
+
+def evaluate_synthetic(df_real, df_synth, metadata, label="Modèle"):
+    print(f"\n📊 Évaluation : {label}")
+    report = QualityReport()
+    report.generate(df_real, df_synth, metadata.to_dict())
+    score = report.get_score()
+    print(f"  Score global : {score:.4f}")
+    details = report.get_details(property_name="Column Shapes")
+    print(f"  Column Shapes :\n{details.head(5).to_string()}")
+    return score, report
+
+score_bn,    rep_bn    = evaluate_synthetic(df, df_bn,    metadata, "BayesianNetwork")
+score_ctgan, rep_ctgan = evaluate_synthetic(df, df_ctgan, metadata, "CTGAN")
+score_tvae,  rep_tvae  = evaluate_synthetic(df, df_tvae,  metadata, "TVAE")
+
+summary = pd.DataFrame({
+    "Modèle":  ["BayesianNetwork", "CTGAN", "TVAE"],
+    "Score SDMetrics": [score_bn, score_ctgan, score_tvae]
+})
+print("\n=== RÉSUMÉ QUALITÉ ===")
+print(summary.to_string(index=False))
+```
+
+---
+
+## Cellule 9 — Visualisations comparées
+
+```python
+def plot_distributions(df_real, df_synth, cols, title_prefix=""):
+    n = min(5, len(cols))
+    fig, axes = plt.subplots(2, n, figsize=(4*n, 7))
+
+    for i, col in enumerate(cols[:n]):
+        # KDE
+        ax = axes[0, i]
+        df_real[col].plot.kde(ax=ax, label="Réel", color="steelblue")
+        df_synth[col].plot.kde(ax=ax, label="Synthétique",
+                               color="tomato", linestyle="--")
+        ax.set_title(col, fontsize=9)
+        ax.legend(fontsize=7)
+
+        # Histogramme
+        ax2 = axes[1, i]
+        ax2.hist(df_real[col], bins=30, alpha=0.5, color="steelblue",
+                 density=True, label="Réel")
+        ax2.hist(df_synth[col], bins=30, alpha=0.5, color="tomato",
+                 density=True, label="Synthétique")
+        ax2.legend(fontsize=7)
+
+    plt.suptitle(f"{title_prefix} — Réel vs Synthétique", fontsize=13)
+    plt.tight_layout()
+    plt.savefig(f"dist_{title_prefix}.png", dpi=120)
+    plt.show()
+
+
+for label, ds in [("CTGAN", df_ctgan), ("TVAE", df_tvae), ("BN", df_bn)]:
+    plot_distributions(df, ds, key_nums, title_prefix=label)
+
+# Corrélations côte à côte
+fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+for ax, (label, ds) in zip(axes, [("CTGAN", df_ctgan),
+                                   ("TVAE",  df_tvae),
+                                   ("BN",    df_bn)]):
+    common = [c for c in key_nums + ["TARGET"] if c in ds.columns]
+    corr_s = ds[common].apply(pd.to_numeric, errors="coerce").corr()
+    sns.heatmap(corr_s, annot=True, fmt=".2f", cmap="coolwarm",
+                center=0, ax=ax, cbar=False, linewidths=0.5)
+    ax.set_title(f"Corrélations — {label}")
+
+plt.suptitle("Matrices de corrélation — Données synthétiques", fontsize=13)
+plt.tight_layout()
+plt.savefig("corr_comparison.png", dpi=120)
+plt.show()
+```
+
+---
+
+## Cellule 10 — TSTR (Train on Synthetic, Test on Real)
+
+```python
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import roc_auc_score
+from sklearn.preprocessing import LabelEncoder
+from xgboost import XGBClassifier
+
+def score_utility(df_train, df_test, label=""):
+    target = "TARGET"
+    cat_local = df_train.select_dtypes(include="object").columns.tolist()
+
+    X_tr = df_train.drop(columns=[target]).copy()
+    y_tr = df_train[target].astype(int)
+    X_te = df_test.drop(columns=[target]).copy()
+    y_te = df_test[target].astype(int)
+
+    common = list(set(X_tr.columns) & set(X_te.columns))
+    X_tr, X_te = X_tr[common], X_te[common]
+
+    le = LabelEncoder()
+    for c in cat_local:
+        if c in X_tr.columns:
+            X_tr[c] = le.fit_transform(X_tr[c].astype(str))
+            X_te[c] = le.transform(X_te[c].astype(str).apply(
+                lambda x: x if x in le.classes_ else le.classes_[0]))
+
+    X_tr = X_tr.apply(pd.to_numeric, errors="coerce").fillna(0)
+    X_te = X_te.apply(pd.to_numeric, errors="coerce").fillna(0)
+
+    model = XGBClassifier(n_estimators=200, max_depth=5, learning_rate=0.05,
+                          use_label_encoder=False, eval_metric="auc",
+                          random_state=42, verbosity=0)
+    model.fit(X_tr, y_tr)
+    auc = roc_auc_score(y_te, model.predict_proba(X_te)[:, 1])
+    gini = 2 * auc - 1
+    print(f"  [{label}] AUC = {auc:.4f} | Gini = {gini:.4f}")
+    return auc
+
+
+df_train_real, df_test_real = train_test_split(df, test_size=0.3,
+                                               stratify=df["TARGET"],
+                                               random_state=42)
+
+print("=== TSTR ===")
+auc_ref   = score_utility(df_train_real, df_test_real, label="Réel → Réel")
+auc_bn    = score_utility(df_bn,    df_test_real, label="BayesianNetwork")
+auc_ctgan = score_utility(df_ctgan, df_test_real, label="CTGAN")
+auc_tvae  = score_utility(df_tvae,  df_test_real, label="TVAE")
+
+# Graphique
+tstr_df = pd.DataFrame({
+    "Modèle": ["Réel (référence)", "BayesianNetwork", "CTGAN", "TVAE"],
+    "AUC": [auc_ref, auc_bn, auc_ctgan, auc_tvae]
+})
+fig, ax = plt.subplots(figsize=(8, 4))
+bars = ax.barh(tstr_df["Modèle"], tstr_df["AUC"],
+               color=["steelblue", "darkorange", "tomato", "seagreen"])
+ax.axvline(auc_ref, color="steelblue", linestyle="--", linewidth=1.5)
+for bar, val in zip(bars, tstr_df["AUC"]):
+    ax.text(val + 0.002, bar.get_y() + bar.get_height()/2,
+            f"{val:.4f}", va="center", fontsize=10)
+ax.set_xlabel("AUC")
+ax.set_title("TSTR — Utilité des données synthétiques")
+plt.tight_layout()
+plt.savefig("tstr_comparison.png", dpi=120)
+plt.show()
+```
+
+---
+
+## Cellule 11 — k-Anonymat
+
+```python
+QUASI_IDENTIFIERS = ["CODE_GENDER", "CNT_CHILDREN", "NAME_FAMILY_STATUS",
+                     "NAME_HOUSING_TYPE", "OCCUPATION_TYPE"]
+QI = [c for c in QUASI_IDENTIFIERS if c in df.columns]
+print(f"Quasi-identifiants retenus : {QI}")
+
+def compute_k_anonymity(df_, qi):
+    return df_.groupby(qi).size()
+
+def enforce_k_anonymity(df_, qi, k=5):
+    group_sizes = df_.groupby(qi).transform("size")
+    df_k = df_[group_sizes >= k].copy()
+    print(f"  k={k} → {len(df_k)} lignes conservées ({len(df_k)/len(df_)*100:.1f}%)")
+    return df_k
+
+ks_real = compute_k_anonymity(df, QI)
+print(f"\nMin k = {ks_real.min()} | Médiane k = {ks_real.median():.0f} | Max k = {ks_real.max()}")
+print(f"Groupes avec k < 5 : {(ks_real < 5).sum()} / {len(ks_real)}")
+
+fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+ks_real.plot.hist(bins=40, ax=axes[0], color="steelblue", edgecolor="white")
+axes[0].axvline(5, color="red", linestyle="--", label="k=5")
+axes[0].set_title("Distribution du k (base réelle)")
+axes[0].legend()
+
+ks_ctgan = compute_k_anonymity(df_ctgan, [c for c in QI if c in df_ctgan.columns])
+ks_ctgan.plot.hist(bins=40, ax=axes[1], color="tomato", edgecolor="white")
+axes[1].axvline(5, color="red", linestyle="--", label="k=5")
+axes[1].set_title("Distribution du k (CTGAN)")
+axes[1].legend()
+
+plt.suptitle("k-Anonymat — Réel vs Synthétique", fontsize=13)
+plt.tight_layout()
+plt.savefig("k_anonymity.png", dpi=120)
+plt.show()
+
+df_k5 = enforce_k_anonymity(df, QI, k=5)
+```
+
+---
+
+## Cellule 12 — ℓ-Diversité
+
+```python
+def compute_l_diversity(df_, qi, sensitive_attr="TARGET"):
+    return (df_.groupby(qi)[sensitive_attr]
+              .nunique()
+              .reset_index()
+              .rename(columns={sensitive_attr: "l_diversity"}))
+
+def enforce_l_diversity(df_, qi, sensitive_attr="TARGET", l=2):
+    div = compute_l_diversity(df_, qi, sensitive_attr)
+    valid = div[div["l_diversity"] >= l]
+    df_l = df_.merge(valid[qi], on=qi, how="inner")
+    print(f"  ℓ={l} → {len(df_l)} lignes conservées ({len(df_l)/len(df_)*100:.1f}%)")
+    return df_l
+
+div_real = compute_l_diversity(df, QI)
+print(f"Min ℓ = {div_real['l_diversity'].min()} | Médiane = {div_real['l_diversity'].median():.0f}")
+print(f"Groupes avec ℓ < 2 : {(div_real['l_diversity'] < 2).sum()} / {len(div_real)}")
+
+fig, ax = plt.subplots(figsize=(8, 4))
+div_real["l_diversity"].value_counts().sort_index().plot.bar(ax=ax,
+    color="seagreen", edgecolor="white")
+ax.set_title("Distribution de ℓ-diversité (base réelle)")
+ax.set_xlabel("ℓ (valeurs distinctes de TARGET dans le groupe)")
+ax.set_ylabel("Nombre de groupes")
+plt.tight_layout()
+plt.savefig("l_diversity.png", dpi=120)
+plt.show()
+
+df_l2 = enforce_l_diversity(df, QI, l=2)
+```
+
+---
+
+## Cellule 13 — DCR (Distance to Closest Record)
+
+```python
+from sklearn.preprocessing import StandardScaler
+from sklearn.neighbors import NearestNeighbors
+
+def dcr_score(df_real, df_synth, n_sample=3000):
+    num_r = df_real.select_dtypes(include=[np.number]).columns.tolist()
+    num_s = df_synth.select_dtypes(include=[np.number]).columns.tolist()
+    common = list(set(num_r) & set(num_s))
+
+    X_r = df_real[common].fillna(0).values
+    X_s = df_synth[common].fillna(0).values
+
+    idx_r = np.random.choice(len(X_r), min(n_sample, len(X_r)), replace=False)
+    idx_s = np.random.choice(len(X_s), min(n_sample, len(X_s)), replace=False)
+    X_r, X_s = X_r[idx_r], X_s[idx_s]
+
+    scaler = StandardScaler()
+    X_r = scaler.fit_transform(X_r)
+    X_s = scaler.transform(X_s)
+
+    nn = NearestNeighbors(n_neighbors=1, algorithm="ball_tree", n_jobs=-1)
+    nn.fit(X_r)
+    dists_sr, _ = nn.kneighbors(X_s)
+    dists_rr, _ = nn.kneighbors(X_r)
+
+    ratio = dists_sr.mean() / max(dists_rr.mean(), 1e-9)
+    return {"mean_sr": dists_sr.mean(), "mean_rr": dists_rr.mean(),
+            "ratio": ratio}, dists_sr.flatten(), dists_rr.flatten()
+
+print("=== DCR — Distance to Closest Record ===")
+for label, ds in [("BayesianNetwork", df_bn), ("CTGAN", df_ctgan), ("TVAE", df_tvae)]:
+    res, dists_sr, dists_rr = dcr_score(df, ds)
+    print(f"\n  [{label}]")
+    print(f"   DCR synth→réel : {res['mean_sr']:.4f}")
+    print(f"   DCR réel→réel  : {res['mean_rr']:.4f}")
+    print(f"   Ratio (> 1 = bon) : {res['ratio']:.3f}")
+
+# Visualisation
+fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+for ax, color, (label, ds) in zip(axes,
+        ["darkorange", "tomato", "seagreen"],
+        [("BayesianNetwork", df_bn), ("CTGAN", df_ctgan), ("TVAE", df_tvae)]):
+    res, dists_sr, dists_rr = dcr_score(df, ds)
+    ax.hist(dists_rr, bins=50, alpha=0.6, density=True,
+            color="steelblue", label="Réel→Réel")
+    ax.hist(dists_sr, bins=50, alpha=0.6, density=True,
+            color=color, label="Synth→Réel")
+    ax.set_title(f"{label}\nRatio = {res['ratio']:.3f}")
+    ax.legend(fontsize=8)
+
+plt.suptitle("DCR — Risque de réidentification", fontsize=13)
+plt.tight_layout()
+plt.savefig("dcr_comparison.png", dpi=120)
+plt.show()
+```
+
+---
+
+## Cellule 14 — MIA (Membership Inference Attack)
+
+```python
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import cross_val_predict
+
+def mia_test(df_real, df_synth, label=""):
+    num_r = df_real.select_dtypes(include=[np.number]).columns.tolist()
+    num_s = df_synth.select_dtypes(include=[np.number]).columns.tolist()
+    common = list(set(num_r) & set(num_s))
+
+    n = min(len(df_real), len(df_synth), 5000)
+    X_r = df_real[common].fillna(0).sample(n, random_state=42).values
+    X_s = df_synth[common].fillna(0).sample(n, random_state=42).values
+
+    X = np.vstack([X_r, X_s])
+    y = np.array([1]*n + [0]*n)
+
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+
+    clf = RandomForestClassifier(n_estimators=100, max_depth=6,
+                                  random_state=42, n_jobs=-1)
+    proba = cross_val_predict(clf, X_scaled, y, cv=5, method="predict_proba")[:, 1]
+    auc = roc_auc_score(y, proba)
+    flag = "⚠️  Distinguable" if auc > 0.6 else "✅ Indiscernable"
+    print(f"  [{label}] MIA AUC = {auc:.4f}  {flag}")
+    return auc
+
+print("=== MEMBERSHIP INFERENCE ATTACK ===")
+print("→ AUC proche de 0.5 = bonne confidentialité\n")
+auc_mia_bn    = mia_test(df, df_bn,    label="BayesianNetwork")
+auc_mia_ctgan = mia_test(df, df_ctgan, label="CTGAN")
+auc_mia_tvae  = mia_test(df, df_tvae,  label="TVAE")
+
+fig, ax = plt.subplots(figsize=(8, 4))
+vals = [auc_mia_bn, auc_mia_ctgan, auc_mia_tvae]
+bars = ax.barh(["BayesianNetwork", "CTGAN", "TVAE"], vals,
+               color=["darkorange", "tomato", "seagreen"])
+ax.axvline(0.5, color="red",    linestyle="--", linewidth=2, label="Parfaite conf. (0.5)")
+ax.axvline(0.6, color="orange", linestyle=":",  linewidth=2, label="Seuil risque (0.6)")
+for bar, val in zip(bars, vals):
+    ax.text(val + 0.005, bar.get_y() + bar.get_height()/2,
+            f"{val:.4f}", va="center", fontsize=10)
+ax.set_xlabel("AUC (MIA)")
+ax.set_title("Membership Inference Attack — Confidentialité")
+ax.legend()
+plt.tight_layout()
+plt.savefig("mia_comparison.png", dpi=120)
+plt.show()
+```
+
+---
+
+## Cellule 15 — Tableau de bord final
+
+```python
+print("=" * 70)
+print("  TABLEAU DE BORD FINAL — PARTIES 1 & 2")
+print("=" * 70)
+
+summary_final = pd.DataFrame({
+    "Modèle":              ["BayesianNetwork", "CTGAN",    "TVAE"],
+    "Score SDMetrics":     [score_bn,          score_ctgan, score_tvae],
+    "TSTR AUC":            [auc_bn,            auc_ctgan,  auc_tvae],
+    "MIA AUC (↓ mieux)":  [auc_mia_bn,        auc_mia_ctgan, auc_mia_tvae],
+})
+summary_final["Delta vs Réel"] = abs(summary_final["TSTR AUC"] - auc_ref)
+summary_final = summary_final.sort_values("Score SDMetrics", ascending=False)
+
+print(summary_final.to_string(index=False))
+summary_final.to_csv("summary_final.csv", index=False)
+
+print(f"""
+Référence réelle (TSTR AUC) : {auc_ref:.4f}
+
+Interprétation :
+  Score SDMetrics  → qualité des distributions (1 = parfait)
+  TSTR AUC         → signal prédictif conservé (proche de {auc_ref:.3f} = bon)
+  MIA AUC          → résistance réidentification (proche de 0.5 = bon)
+  Delta vs Réel    → écart au modèle réel
+
+✅ Figures sauvegardées.
+✅ Bases synthétiques en .parquet.
+✅ summary_final.csv exporté.
+""")
+```
+
+---
+
+**Ordre d'installation** avant de commencer :
+
+```bash
+pip install sdv sdmetrics xgboost scikit-learn pandas numpy matplotlib seaborn tqdm pyarrow
+```
+
+
+
+
+
+
+-------------------------------------------------------------------------------------
+
+
+
+
+methodo p
+
+
+
+
+
+
+ **Partie 1 (génération de données synthétiques)** et
+**Partie 2 (confidentialité / réidentification / k‑anonymat léger)**, 
+## 1. Préparation du notebook (cellule 1)
+
+```python
+import os
+import warnings
+warnings.filterwarnings("ignore")
+
+import numpy as np
+import pandas as pd
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import IsolationForest
+from sklearn.metrics import accuracy_score, roc_auc_score
+from sklearn.preprocessing import KBinsDiscretizer, OneHotEncoder, StandardScaler
+
+import sdv
+from sdv.single_table import CTGANSynthesizer, TVAESynthesizer, GaussianCopulaSynthesizer
+from sdv.metadata import SingleTableMetadata
+from sdmetrics.reports.single_table import QualityReport
+from sdmetrics.single_table import MultiColumnPairDifference
+```
+
+```python
+# ===========================================================================
+# 1) Chargement de la base Home Credit (partie 1 – génération)
+# ===========================================================================
+
+# ────────────────────────────────────────────────────────────
+# Tu modifies seulement cette ligne avec ton chemin local
+chemin_fichier_train = "/chemin/vers/home-credit-default-risk\application_train.csv"
+
+df = pd.read_csv(chemin_fichier_train)
+
+print("Shape de la base Homme Credit (Home Credit Default Risk) :")
+print(df.shape)
+print("Colonnes :", len(df.columns))
+```
+
+***
+
+## 2. Nettoyage minimal & préparation des variables
+
+```python
+# On garde seulement un échantillon pour ton stage (ex. 10k lignes)
+N_sample = 10000
+df = df.sample(N_sample, random_state=42).reset_index(drop=True)
+
+print("Après subsampling :", df.shape)
+
+# On supprime les colonnes trop vides (par exemple)
+df = df.dropna(thresh=0.8*len(df), axis=1)
+
+# On convertit TARGET en entier (juste pour être propre)
+df["TARGET"] = df["TARGET"].astype(int)
+
+# Séparation base réelle / colonnes cibles
+columns_num = df.select_dtypes(include=[np.number]).columns.tolist()
+columns_cat = df.select_dtypes(include=["object"]).columns.tolist()
+
+print("Variables numériques :", len(columns_num))
+print("Variables catégorielles :", len(columns_cat))
+```
+
+***
+
+## 3. Schéma de métadonnées SDV (metadata)
+
+```python
+metadata = SingleTableMetadata()
+metadata.detect_from_dataframe(df)
+
+# (Optionnel) corriger quelques types si besoin
+for col in columns_cat:
+    if col in metadata.columns:
+        metadata.update_column(
+            column_name=col,
+            sdtype="categorical"
+        )
+
+for col in columns_num:
+    if col in metadata.columns:
+        metadata.update_column(
+            column_name=col,
+            sdtype="numerical"
+        )
+
+metadata.validate()
+```
+
+***
+
+## 4. Entraînement de trois générateurs (Bayésien / CTGAN / TVAE)
+
+### 4.1. Gaussian Copula (modèle bayésien)
+
+```python
+# 1) Gaussian Copula (baseline bayésienne)
+copula = GaussianCopulaSynthesizer(metadata)
+copula.fit(df)
+
+data_synth_copula = copula.sample(num_rows=len(df))
+
+print("Gaussian copula - shape synth :", data_synth_copula.shape)
+```
+
+### 4.2. CTGAN
+
+```python
+ctgan = CTGANSynthesizer(metadata)
+ctgan.fit(df)
+
+data_synth_ctgan = ctgan.sample(num_rows=len(df))
+
+print("CTGAN - shape synth :", data_synth_ctgan.shape)
+```
+
+### 4.3. TVAE
+
+```python
+tvae = TVAESynthesizer(metadata)
+tvae.fit(df)
+
+data_synth_tvae = tvae.sample(num_rows=len(df))
+
+print("TVAE - shape synth :", data_synth_tvae.shape)
+```
+
+***
+
+## 5. Vérification de la qualité des données synthétiques (qualité statistique)
+
+On vérifie rapidement **fidélité** (marges, corrélations, etc.).
+
+```python
+# Exemple de rapport de qualité (SDMetrics) sur CTGAN
+report = QualityReport()
+report.generate(
+    real_data=df,
+    synthetic_data=data_synth_ctgan,
+    metadata=metadata
+)
+
+print("GLOBAL SCORE (quality) pour CTGAN :", np.round(report.get_score(), 3))
+```
+
+Si tu veux, tu peux boucler sur les trois.
+
+***
+
+## 6. Confidentialité – détection adverse (Partie 2)
+
+Tu crées un jeu de labels : 0 = synthétique, 1 = réel.
+
+```python
+# ───────────────────────────────────────────────────────────────────────
+# 6.1) DÉTECTION ADVERSE : Peut‑on distinguer réel vs synthétique ?
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score, roc_auc_score
+
+# On prend CTGAN comme exemple (tu peux faire pareil pour Copula / TVAE)
+synth = data_synth_ctgan.copy()
+
+# On met de côté les 1000 premières lignes réelles et synthétiques
+size_eval = 1000
+real_sample = df.head(size_eval).copy()
+synth_sample = synth.head(size_eval).copy()
+
+# On encodera rapidement (simple standard scaler + one‑hot minimal)
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+
+# On s’intéresse à quelques variables num + cat pour le test
+columns_use = [
+    col for col in df.columns
+    if col in df.select_dtypes(include=[np.number]) or col in df.select_dtypes(include=["object"])
+    if col not in ["TARGET"]  # TARGET est la vraie cible crédit, pas pour ce test
+][:20]  # astuce pour garder seulement ~20 colonnes
+
+real_sample = real_sample[columns_use + ["TARGET"]].reset_index(drop=True)
+synth_sample = synth_sample[columns_use].reset_index(drop=True)
+
+print("Colonnes pour détection adverse :")
+print(f"  n = {len(columns_use)}")
+
+# On encode rapidement et robustement
+ct = ColumnTransformer([
+    ("num", StandardScaler(), [col for col in columns_use if col in real_sample.select_dtypes(include=[np.number]).columns]),
+    ("cat", OneHotEncoder(drop="first", handle_unknown="ignore"), [col for col in columns_use if col in real_sample.select_dtypes(include=["object"]).columns])
+], remainder="drop")
+
+real_scaled = ct.fit_transform(real_sample)
+synth_scaled = ct.transform(synth_sample)
+
+# Création du jeu de données mélangé
+X = np.vstack([real_scaled, synth_scaled])
+y = np.hstack([
+    np.ones(real_scaled.shape[0]),          # 1 = réel
+    np.zeros(synth_scaled.shape[0])         # 0 = synthétique
+])
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.3, stratify=y, random_state=42
+)
+
+# Entraînement du modèle de détection adverse
+clf = RandomForestClassifier(
+    n_estimators=100,
+    max_depth=5,
+    class_weight="balanced",
+    random_state=42
+)
+
+clf.fit(X_train, y_train)
+
+y_pred = clf.predict(X_test)
+y_pred_proba = clf.predict_proba(X_test)[:, 1]
+
+print("Performance du détecteur réel vs synthétique (RF):")
+print("  - Accuracy :", np.round(accuracy_score(y_test, y_pred), 3))
+print("  - AUC :", np.round(roc_auc_score(y_test, y_pred_proba), 3))
+
+if roc_auc_score(y_test, y_pred_proba) < 0.55:
+    print("  → Le modèle de détection est proche de 'pile ou face'.")
+    print("  → Bon signe : les synthétiques sont difficiles à distinguer des vrais.")
+else:
+    print("  → Le modèle distingue bien réel / synthétique.")
+    print("  → Les données synthétiques sont trop différentes.")
+```
+
+***
+
+## 7. (Optionnel) Distance client par client (vérification de similarité)
+
+On vérifie que **aucun client synthétique** ne ressemble trop à un client réel.
+
+```python
+from sklearn.metrics import pairwise_distances
+
+# On se limite à un petit échantillon pour des raisons de coût
+n_clip = 500
+real_clip = real_scaled[:n_clip]
+synth_clip = synth_scaled[:n_clip]
+
+# Calcul de la distance euclidienne entre chaque synthétique et chaque réel
+dist_matrix = pairwise_distances(synth_clip, real_clip, metric="euclidean")
+
+# Pour chaque client synthétique, tu peux regarder la distance minimale avec un vrai
+min_distances = dist_matrix.min(axis=1)
+
+xlim = (0, 10)
+plt.figure(figsize=(10, 4))
+sns.histplot(min_distances, bins=50, kde=True)
+plt.axvline(x=np.percentile(min_distances, 75), color="red", ls="--", label="75e percentile")
+plt.xlabel("Distance minimale avec un vrai client")
+plt.ylabel("Frequence")
+plt.title("Distribution des distances minimales (synthétique vs réel)")
+plt.legend()
+plt.show()
+
+print("Distances minimales (synth -> réel):")
+print("  - min  :", np.min(min_distances))
+print("  - 25  :", np.round(np.percentile(min_distances, 25), 3))
+print("  - 50  :", np.round(np.percentile(min_distances, 50), 3))
+print("  - 75  :", np.round(np.percentile(min_distances, 75), 3))
+print("  - max :", np.max(min_distances))
+```
+
+Si les distances restent **raisonnables** (pas de valeurs quasi nulles partout), c’est un bon signe :  
+→ aucun client synthétique n’est “copié” d’un réel.
+
+***
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+-----------------------------------------------------------------------------
+
+code p 
 
