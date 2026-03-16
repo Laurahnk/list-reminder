@@ -1,1285 +1,532 @@
-deux niveaux d’explication pour chaque notion :  
-1) version ultra simple + image,  
-2) version un peu plus statistique, en lien direct avec ton projet Home Credit / données synthétiques.
+## 1. Version avec packages (recommandée)
 
-On couvre : **k‑anonymat**, **ℓ‑diversité**, puis **TSTR** et **TRTS**.
+### 1.1. Installation des packages (une fois en début de notebook)
 
-## 1. k‑anonymat – version simple et imagée
+```python
+!pip install sdv==1.11.0
+!pip install ydata-profiling==4.8.0
+!pip install opacus==1.4.0
+!pip install pandasql==0.7.3
+!pip install pykanon==0.2.0
+```
 
-### Intuition
-
-Idée : « cacher chaque personne **dans un groupe** d’au moins k personnes qui lui ressemblent sur les infos quasi‑identifiantes. »
-
-- On choisit quelques **quasi‑identifiants** (QI) : âge, code postal, type de contrat, etc.  
-- On transforme la base pour que **chaque combinaison de QI** apparaisse chez **au moins k personnes**.  
-- Résultat : si quelqu’un connaît “une femme de 32 ans à Paris avec une carte Gold”, il ne peut pas savoir **laquelle** parmi au moins k lignes c’est.
-
-Image :  
-- Tu as 1 personne avec profil très rare → très facile à repérer.  
-- Tu agrandis le « flou » (en groupant les âges, les zones géographiques, etc.) jusqu’à ce qu’elle soit noyée dans un groupe de k profils identiques sur ces QI.
-
-### Exemple concret
-
-Supposons qu’on garde comme QI :  
-- Age, Ville, Type_de_contrat.
-
-Table brute :
-
-| ID | Âge | Ville | Contrat | Défaut |
-|----|-----|-------|---------|--------|
-| 1  | 32  | Paris | CDI     | 0      |
-| 2  | 32  | Paris | CDI     | 1      |
-| 3  | 33  | Paris | CDI     | 0      |
-| 4  | 35  | Lyon  | CDD     | 0      |
-
-Ici, les combinaisons (33, Paris, CDI) ou (35, Lyon, CDD) n’apparaissent qu’une fois → k=1.
-
-Si on veut **k = 3**, on peut :
-
-- regrouper les âges : 30–35,  
-- regrouper les villes : “IDF” vs “Province”, etc.
-
-Nouvelle table :
-
-| ID | Tranche_âge | Région      | Contrat | Défaut |
-|----|-------------|------------|---------|--------|
-| 1  | 30–35       | IDF        | CDI     | 0      |
-| 2  | 30–35       | IDF        | CDI     | 1      |
-| 3  | 30–35       | IDF        | CDI     | 0      |
-| 4  | 30–35       | Province   | CDD     | 0      |
-
-La combinaison (30–35, IDF, CDI) apparaît 3 fois → k=3.  
-Si quelqu’un sait “32 ans, Paris, CDI”, il ne sait pas lequel des 3 c’est.
+Temps: 5–10 minutes la première fois (dépend du réseau et de la machine).
 
 ***
 
-## 1‑bis. k‑anonymat – version un peu plus statistique
+### 1.2. Préparation des données pour la synthèse
 
-Formellement :
+On utilise les mêmes imports que dans ton notebook et on prépare un tableau propre, en séparant features / cible. [ppl-ai-file-upload.s3.amazonaws](https://ppl-ai-file-upload.s3.amazonaws.com/web/direct-files/attachments/215619752/6f809d65-56b5-4ca4-b2da-880f77cb1918/Projet_stage.ipynb?AWSAccessKeyId=ASIA2F3EMEYEZW6A7IHD&Signature=GnrlqHGxPIbRWF2sMOVj0r5OJiU%3D&x-amz-security-token=IQoJb3JpZ2luX2VjEBQaCXVzLWVhc3QtMSJHMEUCIQDgfjI%2FZxQU%2FX2FkRCeTJRc7JHZ6JyKpyEYdtMhVck5xQIgbfwxalJWp6AngR91%2B3utXjMq3Q%2Bv9liJph6M%2BPkuh3Eq%2FAQI3f%2F%2F%2F%2F%2F%2F%2F%2F%2F%2FARABGgw2OTk3NTMzMDk3MDUiDPqD75QZEbH%2B4QKw0SrQBLRz%2BPz%2BtnYMJhGkYv5usUcVj04pWItahwt4ql%2FuVqAQ04el2qpzjqMrX1mxOT3s62lIZNJxcDGtLU00m7Jg641WdImBukxCaQcYt4iTKWE0RTEVIYUaUftwe%2BGS8P5bfKrBwJqHxB%2FC6%2FHK5QMzZJ7hkqRvjSztLJEjJn515iIbRD1qct9G15im2EQTVI%2BPReg3bjmnRDeKgcuDgk9wTc%2Fj9AP%2B%2FLvdRyFgkFOSMJH%2F%2FyPAPSNBOsew4mo9YXsL%2FO1noghCDikPMFhNeiceEmwEeECqJEyd1YtoutxUDxC92fzZ%2BP1oDlJG9VBs%2FThgVLWkV0WJEq6gCFo023b%2Ba1dyg87s5%2BnrEH11IWZ4d5p4xj5G9H1W6lWFuZ6%2Fq9colEb21IB1qXD8lUH8hEQIx8TwB3Y8hrL7nE7xalK3EDDKi%2FR7mLT7lbzAN0OUaN4t367cgAjxRhgoJkcpQ3mFwBYKf64zqfL59%2By%2B1NFv3qf5QsG7K8DnsFVjcz5pSrZ7gBFn66t5O8OM%2FnnueCQElBlwfF4CYd38EySnI%2BZUsauvD%2FU2s7ofCrVgDdtecyPqAewpCUZAjIbU7wg7fGdJ5zFSP6JpuKMIOVkqcpRCfHrtoAszp%2BQ0QRqY30vcjKe5xndPt%2BchRasRjeWMxxDDLJ0RUXIyPu3umtVz6vjfOxs%2BebUqPPq3HNEZE9WzpXvjHIwNOIDwZ5LYqxEjsFJe6yoU1blMYZ7NHMwF1heG8j5MYdPf%2FKKAvnr5qA%2FkU41ttLmx8r72MvjEYhUTLW90KNEw0LvhzQY6mAEIp%2BD4T%2BAR6Foyb0qro28ezIRsk9cgM4Fid4B3X2dyjRNIsDtNOg0qvedTFgxDgR4UVWfPqpDvrOdlgbDOvVYhl4Af3iPndlMe6zT4UP3pWkOkBkzVON3dPzX7nwVJntlVQJrZqk1%2F%2BG%2FlAqWJo7VmDaLOw2W9aJiFON9%2FdsUMyuLa%2BGl%2BcWZMbzy2mA40BwqXQcGPYMFsXg%3D%3D&Expires=1773692710)
 
-- On choisit un ensemble de colonnes QI = {Age, Ville, Contrat, …}.  
-- On dit que la table est **k‑anonyme** si, **pour toute combinaison de valeurs** sur ces QI, il y a **au moins k lignes** qui partagent exactement ces valeurs.  
-- On obtient ça par :
-  - **généralisation** : transformer 32 en [30–35], Paris en IDF, etc.  
-  - **suppression** : enlever des QI trop rares ou trop sensibles.
+```python
+import numpy as np
+import pandas as pd
 
-Compromis :
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder
 
-- Plus k est grand → plus les gens sont « noyés dans la foule »,  
-- mais plus tu perds en **finesse des données** (moins utile pour le scoring fin).
+# On part de app_train déjà chargé
+df = app_train.copy()
 
-## 2. ℓ‑diversité – version simple et imagée
+# On enlève les colonnes techniques évidentes
+drop_cols = ['SK_ID_CURR']
+df = df.drop(columns=drop_cols, errors='ignore')
 
-### Intuition
+# Encodage simple des catégorielles (LabelEncoder par colonne)
+categorical_cols = df.select_dtypes(include=['object']).columns.tolist()
 
-k‑anonymat garantit : “je ne sais pas **qui** c’est parmi ce groupe”.  
-Mais il ne garantit pas que tu ne devines pas **son état sensible** (défaut, maladie, etc.).
+for col in categorical_cols:
+    le = LabelEncoder()
+    df[col] = df[col].fillna('MISSING')
+    df[col] = le.fit_transform(df[col].astype(str))
 
-ℓ‑diversité ajoute :  
-> « Dans chaque groupe k‑anonyme, la **variable sensible** doit prendre **au moins ℓ valeurs différentes**. »
+# Gestion simple des NA numériques
+for col in df.columns:
+    if col not in categorical_cols:
+        df[col] = df[col].fillna(df[col].median())
 
-Image :  
-- Tu as un groupe de 10 personnes (k=10) avec les mêmes QI.  
-- Si **tous** ont défaut=1, alors si je sais que tu es dans ce groupe, je sais que tu es en défaut → problème.  
-- ℓ‑diversité exige qu’il y ait **de la diversité** sur la variable sensible (par ex. au moins un certain nombre de valeurs différentes ou de proportions).
+# Séparation cible / features
+target_col = 'TARGET'
+X = df.drop(columns=[target_col])
+y = df[target_col]
 
-### Exemple concret
+# Train / test pour TSTR / TRTS
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.3, random_state=42, stratify=y
+)
 
-Groupe k‑anonyme (k = 3), même QI :
+train_data = pd.concat([X_train, y_train], axis=1)
+test_data = pd.concat([X_test, y_test], axis=1)
 
-| Âge_tranche | Région | Contrat | Défaut |
-|-------------|--------|---------|--------|
-| 30–35       | IDF    | CDI     | 1      |
-| 30–35       | IDF    | CDI     | 1      |
-| 30–35       | IDF    | CDI     | 1      |
-
-Ce groupe est **3‑anonyme**, mais **pas ℓ‑divers** pour ℓ=2, car tous ont Défaut=1.  
-→ si je sais que tu es dans ce groupe, je sais que tu es en défaut.
-
-Pour ℓ = 2, on voudrait par exemple :
-
-| Âge_tranche | Région | Contrat | Défaut |
-|-------------|--------|---------|--------|
-| 30–35       | IDF    | CDI     | 1      |
-| 30–35       | IDF    | CDI     | 0      |
-| 30–35       | IDF    | CDI     | 1      |
-
-Ici, la variable sensible (Défaut) prend au moins 2 valeurs (0 et 1).  
-→ on a une **2‑diversité** pour la variable sensible.
+print(train_data.shape, test_data.shape)
+```
 
 ***
 
-## 2‑bis. ℓ‑diversité – version un peu plus statistique
+### 1.3. CTGAN (SDV)
 
-- Soit une table k‑anonyme selon des QI choisis.  
-- Pour une variable sensible S (défaut, type de maladie, etc.),  
-  - **ℓ‑diversité** impose que, dans chaque **équivalence de classe** (groupe de lignes partageant les mêmes QI), la distribution de S soit :
-    - soit avec **au moins ℓ valeurs distinctes**,  
-    - soit avec un certain niveau d’**entropie**, etc. (définition plus stricte).
+```python
+from sdv.metadata import SingleTableMetadata
+from sdv.single_table import CTGANSynthesizer
 
-Cela évite les attaques par **inférence** :  
-- même si tu identifies le groupe, tu ne peux pas en déduire avec certitude la valeur de S.
+# 1) Métadonnées
+metadata = SingleTableMetadata()
+metadata.detect_from_dataframe(train_data)
 
-Dans ton projet :
+# On peut indiquer explicitement la cible binaire
+metadata.update_column(
+    column_name=target_col,
+    sdtype='boolean'
+)
 
-- Tu peux dire :  
-  - k‑anonymat = on protège l’identification par QI,  
-  - ℓ‑diversité = on évite d’inférer la **cible** (défaut) même si on a les QI.
+# 2) Modèle CTGAN
+ctgan = CTGANSynthesizer(
+    metadata,
+    enforce_rounding=True,
+    epochs=100,            # mets 50 pour aller plus vite
+    batch_size=512
+)
 
-***
+# 3) Entraînement
+ctgan.fit(train_data)
 
-## 3. TSTR – Train on Synthetic, Test on Real
+# 4) Génération de données synthétiques
+n_synth = len(train_data)   # même taille que train réel
+ctgan_synth = ctgan.sample(num_rows=n_synth)
 
-C’est exactement dans ton projet.
+print(ctgan_synth.shape)
+ctgan_synth.head()
+```
 
-### 3.1. Version simple imagée
-
-TSTR = **Train on Synthetic, Test on Real**.
-
-- Tu **entraînes** ton modèle de scoring sur la **base synthétique** (produite par CTGAN, TVAE, etc.).  
-- Tu **testes** ce modèle sur des **vraies données** (réelles, non vues pendant la génération).
-
-Idée intuitive :  
-> « Si mon modèle, entraîné seulement sur des données synthétiques, marche bien sur les vraies données, c’est que mes données synthétiques sont bonnes pour la tâche de scoring. »
-
-Image :  
-- Tu apprends à jouer au tennis avec des **robots** (les clients synthétiques).  
-- Si après, tu joues bien avec des **vrais humains** (les vrais clients) → les robots t’ont appris des mouvements **réalistes**.
-
-### 3.2. Plus techniquement
-
-- Tu fais une génération synthétique à partir de la base réelle (ou d’un sous‑ensemble).  
-- Tu obtiens un dataset synthétique \(D_{\text{synth}}\).  
-- Tu sépares des données réelles pour test \(D_{\text{real\_test}}\) (non utilisées pour la génération).  
-- Tu :
-  - **en entraînement** :  
-    - modèle \(f\) sur \(D_{\text{synth}}\).  
-  - **en test** :  
-    - tu évalues `AUC(f, D_real_test)`, `Gini`, etc.
-
-Une bonne qualité TSTR signifie :
-
-- tes données synthétiques préservent **les relations utiles à la prédiction** de la cible (TARGET),  
-- et permettent d’entraîner un modèle qui **généralise** bien sur du réel.
-
-Dans ton stage :  
-- TSTR sera **un des tests centraux** pour dire :  
-  - “nos données synthétiques sont utilisables pour R&D / audit de modèles”.
+Temps:  
+- `epochs=50` ~ 10–20 min sur CPU pour 300k lignes,  
+- `epochs=100` peut monter à 30–40 min.
 
 ***
 
-## 4. TRTS – Train on Real, Test on Synthetic
+### 1.4. TVAE (SDV)
 
-TRTS = **Train on Real, Test on Synthetic**.
+```python
+from sdv.single_table import TVAESynthesizer
 
-### 4.1. Version simple imagée
+tvae = TVAESynthesizer(
+    metadata,
+    epochs=100,          # pareil, adapter pour le temps
+    batch_size=512
+)
 
-- Tu **entraînes** ton modèle sur la **base réelle**.  
-- Tu **testes** ses performances sur la **base synthétique**.
+tvae.fit(train_data)
 
-Intuition :  
-> « Si un modèle entraîné sur du réel marche bien sur du synthétique, c’est que le synthétique ressemble suffisamment à la réalité. »
+tvae_synth = tvae.sample(num_rows=n_synth)
+print(tvae_synth.shape)
+tvae_synth.head()
+```
 
-Image :  
-- Tu apprends à jouer au tennis sur de vrais courts, avec de vrais joueurs.  
-- Si quand tu vas sur un court virtuel (données synthétiques) tu joues toujours bien, c’est que le court virtuel **imite bien** le réel.
-
-### 4.2. Plus techniquement
-
-- Entraînement :  
-  - modèle \(f\) sur un dataset réel \(D_{\text{real\_train}}\).  
-- Test :  
-  - évaluation de `AUC(f, D_synth_test)`.
-
-Une bonne qualité TRTS signifie :
-
-- les données synthétiques ont une **distribution compatible** avec les modèles appris sur les vraies données,  
-- ce qui est un indicateur que ton générateur (CTGAN, TVAE, etc.) ne crée pas une base « tordue ».
+Temps: comparable à CTGAN, souvent un peu plus rapide (15–30 min selon epochs).
 
 ***
 
-## 5. Lien avec ton projet (et comment l’expliquer)
+### 1.5. Modèle bayésien simple (Naive Bayes sur données réelles)
 
-Tu peux positionner ces éléments ainsi dans ta présentation :
+Pour le benchmark, on peut mettre un Naive Bayes gaussien ou un modèle de régression logistique bayésienne (via `sklearn` + prior L2). Voici un Naive Bayes simple pour la cible, utilisé à la fois sur réel et synthétique.
 
-### k‑anonymat & ℓ‑diversité
+```python
+from sklearn.naive_bayes import GaussianNB
+from sklearn.metrics import roc_auc_score
 
-- Tu expliques que ce sont des **techniques classiques** d’anonymisation :  
-  - **k‑anonymat** : chaque profil n’est pas distinguable de k‑1 autres sur les caractéristiques quasi‑identifiantes.  
-  - **ℓ‑diversité** : dans chaque groupe de k profils, la variable sensible (défaut) reste variée, on ne peut pas deviner la cible juste en connaissant le groupe.  
+def fit_nb_and_eval(train_df, test_df, target_col='TARGET'):
+    X_train = train_df.drop(columns=[target_col])
+    y_train = train_df[target_col]
+    X_test = test_df.drop(columns=[target_col])
+    y_test = test_df[target_col]
+
+    nb = GaussianNB()
+    nb.fit(X_train, y_train)
+    proba = nb.predict_proba(X_test)[:, 1]
+
+    auc = roc_auc_score(y_test, proba)
+    return auc
+
+# Naive Bayes sur vrai train / test réel
+auc_real_nb = fit_nb_and_eval(train_data, test_data, target_col)
+print("AUC Naive Bayes sur réel:", auc_real_nb)
+
+# TSTR : Train sur synthétique, Test sur réel
+ctgan_train = ctgan_synth.copy()
+tvae_train = tvae_synth.copy()
 
+ctgan_train[target_col] = ctgan_train[target_col].astype(int)
+tvae_train[target_col] = tvae_train[target_col].astype(int)
 
-> « k‑anonymat protège contre la réidentification par croisement d’information,  
-> ℓ‑diversité limite la possibilité de déduire une variable sensible même si on repère un groupe. »
+auc_ctgan_tstr = fit_nb_and_eval(ctgan_train, test_data, target_col)
+auc_tvae_tstr = fit_nb_and_eval(tvae_train, test_data, target_col)
 
-### TSTR & TRTS
+print("AUC NB TSTR (CTGAN->réel) :", auc_ctgan_tstr)
+print("AUC NB TSTR (TVAE->réel)  :", auc_tvae_tstr)
+```
 
-présenter comme **deux tests complémentaires** pour juger de la qualité des données synthétiques pour le scoring :
+Temps: quelques secondes.
 
-- **TSTR** (Train on Synthetic, Test on Real) :  
-  - « Est‑ce qu’un modèle entraîné sur synthétique se transpose bien sur réel ? »  
-  - Bonne TSTR = les synthétiques capturent la logique du scoring réel.
+***
 
-- **TRTS** (Train on Real, Test on Synthetic) :  
-  - « Est‑ce qu’un modèle appris sur réel se comporte comme prévu sur synthétique ? »  
-  - Bonne TRTS = les synthétiques respectent la structure statistique du réel.
+### 1.6. Differential privacy (exemple avec Opacus sur un MLP binaire)
 
-tu peux faire un slide qui résume :
+Ici on entraîne un petit réseau de neurones sur les données réelles avec DP‑SGD (Opacus). Tu peux t’en servir pour comparer performance / confidentialité.
 
-- k‑anonymat / ℓ‑diversité = **protection de la confidentialité**,  
-- TSTR / TRTS = **validation de l’utilité des données synthétiques pour le scoring**.
+```python
+import torch
+from torch import nn
+from torch.utils.data import TensorDataset, DataLoader
+from opacus import PrivacyEngine
+from sklearn.preprocessing import StandardScaler
 
+# On prépare un sous-échantillon pour aller plus vite
+sample_frac = 0.2      # 20% du train, ajustable
+sub = train_data.sample(frac=sample_frac, random_state=42)
 
+X_sub = sub.drop(columns=[target_col]).values.astype(np.float32)
+y_sub = sub[target_col].values.astype(np.int64)
 
+scaler = StandardScaler()
+X_sub = scaler.fit_transform(X_sub)
 
+X_tensor = torch.tensor(X_sub)
+y_tensor = torch.tensor(y_sub)
 
+dataset = TensorDataset(X_tensor, y_tensor)
+loader = DataLoader(dataset, batch_size=1024, shuffle=True)
 
+input_dim = X_sub.shape [ppl-ai-file-upload.s3.amazonaws](https://ppl-ai-file-upload.s3.amazonaws.com/web/direct-files/attachments/215619752/6f809d65-56b5-4ca4-b2da-880f77cb1918/Projet_stage.ipynb?AWSAccessKeyId=ASIA2F3EMEYEZW6A7IHD&Signature=GnrlqHGxPIbRWF2sMOVj0r5OJiU%3D&x-amz-security-token=IQoJb3JpZ2luX2VjEBQaCXVzLWVhc3QtMSJHMEUCIQDgfjI%2FZxQU%2FX2FkRCeTJRc7JHZ6JyKpyEYdtMhVck5xQIgbfwxalJWp6AngR91%2B3utXjMq3Q%2Bv9liJph6M%2BPkuh3Eq%2FAQI3f%2F%2F%2F%2F%2F%2F%2F%2F%2F%2FARABGgw2OTk3NTMzMDk3MDUiDPqD75QZEbH%2B4QKw0SrQBLRz%2BPz%2BtnYMJhGkYv5usUcVj04pWItahwt4ql%2FuVqAQ04el2qpzjqMrX1mxOT3s62lIZNJxcDGtLU00m7Jg641WdImBukxCaQcYt4iTKWE0RTEVIYUaUftwe%2BGS8P5bfKrBwJqHxB%2FC6%2FHK5QMzZJ7hkqRvjSztLJEjJn515iIbRD1qct9G15im2EQTVI%2BPReg3bjmnRDeKgcuDgk9wTc%2Fj9AP%2B%2FLvdRyFgkFOSMJH%2F%2FyPAPSNBOsew4mo9YXsL%2FO1noghCDikPMFhNeiceEmwEeECqJEyd1YtoutxUDxC92fzZ%2BP1oDlJG9VBs%2FThgVLWkV0WJEq6gCFo023b%2Ba1dyg87s5%2BnrEH11IWZ4d5p4xj5G9H1W6lWFuZ6%2Fq9colEb21IB1qXD8lUH8hEQIx8TwB3Y8hrL7nE7xalK3EDDKi%2FR7mLT7lbzAN0OUaN4t367cgAjxRhgoJkcpQ3mFwBYKf64zqfL59%2By%2B1NFv3qf5QsG7K8DnsFVjcz5pSrZ7gBFn66t5O8OM%2FnnueCQElBlwfF4CYd38EySnI%2BZUsauvD%2FU2s7ofCrVgDdtecyPqAewpCUZAjIbU7wg7fGdJ5zFSP6JpuKMIOVkqcpRCfHrtoAszp%2BQ0QRqY30vcjKe5xndPt%2BchRasRjeWMxxDDLJ0RUXIyPu3umtVz6vjfOxs%2BebUqPPq3HNEZE9WzpXvjHIwNOIDwZ5LYqxEjsFJe6yoU1blMYZ7NHMwF1heG8j5MYdPf%2FKKAvnr5qA%2FkU41ttLmx8r72MvjEYhUTLW90KNEw0LvhzQY6mAEIp%2BD4T%2BAR6Foyb0qro28ezIRsk9cgM4Fid4B3X2dyjRNIsDtNOg0qvedTFgxDgR4UVWfPqpDvrOdlgbDOvVYhl4Af3iPndlMe6zT4UP3pWkOkBkzVON3dPzX7nwVJntlVQJrZqk1%2F%2BG%2FlAqWJo7VmDaLOw2W9aJiFON9%2FdsUMyuLa%2BGl%2BcWZMbzy2mA40BwqXQcGPYMFsXg%3D%3D&Expires=1773692710)
 
+class MLP(nn.Module):
+    def __init__(self, input_dim):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(input_dim, 128),
+            nn.ReLU(),
+            nn.Linear(128, 64),
+            nn.ReLU(),
+            nn.Linear(64, 2)
+        )
 
+    def forward(self, x):
+        return self.net(x)
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model = MLP(input_dim).to(device)
 
+criterion = nn.CrossEntropyLoss()
+optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
+# Privacy parameters (à ajuster: epsilon, delta)
+max_grad_norm = 1.0
+target_epsilon = 5.0
+target_delta = 1e-5
+epochs = 10
 
+privacy_engine = PrivacyEngine(
+    model,
+    sample_rate=len(loader.dataset) / (len(loader.dataset) * epochs),
+    max_grad_norm=max_grad_norm,
+    epochs=epochs,
+    target_epsilon=target_epsilon,
+    target_delta=target_delta,
+)
+privacy_engine.attach(optimizer)
 
+for epoch in range(epochs):
+    model.train()
+    epoch_loss = 0.0
+    for xb, yb in loader:
+        xb, yb = xb.to(device), yb.to(device)
+        optimizer.zero_grad()
+        logits = model(xb)
+        loss = criterion(logits, yb)
+        loss.backward()
+        optimizer.step()
+        epoch_loss += loss.item() * xb.size(0)
 
+    print(f"Epoch {epoch+1}/{epochs} - Loss: {epoch_loss / len(loader.dataset):.4f}")
 
+epsilon, best_alpha = privacy_engine.get_epsilon(delta=target_delta)
+print(f"Training finished with (ε = {epsilon:.2f}, δ = {target_delta}) at α = {best_alpha}")
+```
 
+Temps: 5–15 minutes selon la taille de l’échantillon, le nombre d’epochs et le hardware.
 
+***
 
+### 1.7. k‑anonymat et l‑diversity (pykanon + pandas)
 
+On choisit un set de quasi‑identifiants (ex: âge binned, sexe, statut famille) et on calcule k pour chaque groupe, plus la diversité des valeurs de la variable sensible (par ex. TARGET ou revenu).
 
+```python
+# Exemple simple sans pykanon: calcul à la main dans pandas
 
+quasi_ids = ['CODE_GENDER', 'NAME_FAMILY_STATUS', 'DAYS_BIRTH']
+sensitive_col = 'TARGET'
 
+# On suppose que ces colonnes sont encore dans df
+qi_df = df[quasi_ids + [sensitive_col]].copy()
 
-1. **protéger la confidentialité** des personnes,
-2. **garder des données utiles** pour entraîner et évaluer des modèles de scoring.
+# On discretise l'âge (DAYS_BIRTH négatif -> âge positif)
+qi_df['AGE'] = (-qi_df['DAYS_BIRTH'] / 365.25).astype(int)
+qi_df = qi_df.drop(columns=['DAYS_BIRTH'])
 
-Autrement dit, tu veux éviter ceci :
+# On peut binner AGE
+qi_df['AGE_BIN'] = pd.cut(qi_df['AGE'], bins=[18,25,30,35,40,45,50,55,60,65,70], right=True)
+quasi_ids2 = ['CODE_GENDER', 'NAME_FAMILY_STATUS', 'AGE_BIN']
 
-* des données **trop proches du réel** → risque de réidentification, fuite d’information,
-* des données **trop déformées** → modèles inutiles, AUC qui s’effondre, conclusions fausses.
+grouped = qi_df.groupby(quasi_ids2)
 
-Les notions de **k-anonymat** et **l-diversity** servent surtout à la **protection / anonymisation**, tandis que **TSTR** et **TRTS** servent surtout à la **mesure d’utilité des données synthétiques**.
+k_values = grouped.size().rename('k').reset_index()
 
-Je vais te l’expliquer en deux niveaux :
+l_div = grouped[sensitive_col].nunique().rename('l_diversity').reset_index()
 
-* d’abord **très simplement, avec des images mentales** ;
-* ensuite de manière **plus statistique et rigoureuse**, toujours en lien avec ton stage.
+k_l_df = pd.merge(k_values, l_div, on=quasi_ids2)
 
+print(k_l_df.head())
 
-# 1. Vue d’ensemble dans l’optique de ton projet
+print("k minimum:", k_l_df['k'].min())
+print("k médian :", k_l_df['k'].median())
+print("l-diversity minimum:", k_l_df['l_diversity'].min())
+```
 
-Dans ton stage, tu travailles sur une base de crédit type **Home Credit Default Risk** avec une cible de défaut :
+Temps: quelques secondes.
 
-* `TARGET = 1` : défaut
-* `TARGET = 0` : non-défaut
+***
 
-Tu veux sans doute faire un pipeline du genre :
+## 2. Version sans gros packages spécialisés (tout PyTorch + pandas)
 
-**base réelle → anonymisation / génération synthétique → entraînement de modèles → évaluation de la qualité et de la confidentialité**
+Ici, pas de `sdv`, pas d’`opacus`, pas de `pykanon`. On garde seulement `numpy`, `pandas`, `sklearn`, `torch`. [ppl-ai-file-upload.s3.amazonaws](https://ppl-ai-file-upload.s3.amazonaws.com/web/direct-files/attachments/215619752/6f809d65-56b5-4ca4-b2da-880f77cb1918/Projet_stage.ipynb?AWSAccessKeyId=ASIA2F3EMEYEZW6A7IHD&Signature=GnrlqHGxPIbRWF2sMOVj0r5OJiU%3D&x-amz-security-token=IQoJb3JpZ2luX2VjEBQaCXVzLWVhc3QtMSJHMEUCIQDgfjI%2FZxQU%2FX2FkRCeTJRc7JHZ6JyKpyEYdtMhVck5xQIgbfwxalJWp6AngR91%2B3utXjMq3Q%2Bv9liJph6M%2BPkuh3Eq%2FAQI3f%2F%2F%2F%2F%2F%2F%2F%2F%2F%2FARABGgw2OTk3NTMzMDk3MDUiDPqD75QZEbH%2B4QKw0SrQBLRz%2BPz%2BtnYMJhGkYv5usUcVj04pWItahwt4ql%2FuVqAQ04el2qpzjqMrX1mxOT3s62lIZNJxcDGtLU00m7Jg641WdImBukxCaQcYt4iTKWE0RTEVIYUaUftwe%2BGS8P5bfKrBwJqHxB%2FC6%2FHK5QMzZJ7hkqRvjSztLJEjJn515iIbRD1qct9G15im2EQTVI%2BPReg3bjmnRDeKgcuDgk9wTc%2Fj9AP%2B%2FLvdRyFgkFOSMJH%2F%2FyPAPSNBOsew4mo9YXsL%2FO1noghCDikPMFhNeiceEmwEeECqJEyd1YtoutxUDxC92fzZ%2BP1oDlJG9VBs%2FThgVLWkV0WJEq6gCFo023b%2Ba1dyg87s5%2BnrEH11IWZ4d5p4xj5G9H1W6lWFuZ6%2Fq9colEb21IB1qXD8lUH8hEQIx8TwB3Y8hrL7nE7xalK3EDDKi%2FR7mLT7lbzAN0OUaN4t367cgAjxRhgoJkcpQ3mFwBYKf64zqfL59%2By%2B1NFv3qf5QsG7K8DnsFVjcz5pSrZ7gBFn66t5O8OM%2FnnueCQElBlwfF4CYd38EySnI%2BZUsauvD%2FU2s7ofCrVgDdtecyPqAewpCUZAjIbU7wg7fGdJ5zFSP6JpuKMIOVkqcpRCfHrtoAszp%2BQ0QRqY30vcjKe5xndPt%2BchRasRjeWMxxDDLJ0RUXIyPu3umtVz6vjfOxs%2BebUqPPq3HNEZE9WzpXvjHIwNOIDwZ5LYqxEjsFJe6yoU1blMYZ7NHMwF1heG8j5MYdPf%2FKKAvnr5qA%2FkU41ttLmx8r72MvjEYhUTLW90KNEw0LvhzQY6mAEIp%2BD4T%2BAR6Foyb0qro28ezIRsk9cgM4Fid4B3X2dyjRNIsDtNOg0qvedTFgxDgR4UVWfPqpDvrOdlgbDOvVYhl4Af3iPndlMe6zT4UP3pWkOkBkzVON3dPzX7nwVJntlVQJrZqk1%2F%2BG%2FlAqWJo7VmDaLOw2W9aJiFON9%2FdsUMyuLa%2BGl%2BcWZMbzy2mA40BwqXQcGPYMFsXg%3D%3D&Expires=1773692710)
 
-Dans ce pipeline :
+Ça demande plus de code, mais ça passera sur un environnement pro restreint.
 
-## k-anonymat
+### 2.1. MLP génératif “style VAE simplifié” pour tabulaire
 
-Répond à la question :
+On encode tout en numérique (tu l’as déjà fait), on normalise, et on apprend un autoencoder / VAE simple qui sert de générateur.
 
-> “Est-ce qu’on peut retrouver une personne précise dans la base ?”
+```python
+import torch
+from torch import nn
+from torch.utils.data import DataLoader, TensorDataset
+from sklearn.preprocessing import StandardScaler
 
-## l-diversity
+df_g = train_data.copy()
 
-Répond à la question :
+Xg = df_g.drop(columns=[target_col]).values.astype(np.float32)
+yg = df_g[target_col].values.astype(np.float32)
 
-> “Même si on ne retrouve pas exactement la personne, est-ce qu’on peut quand même deviner une info sensible sur elle ?”
+scaler_g = StandardScaler()
+Xg = scaler_g.fit_transform(Xg)
 
-## TSTR
+Xg_tensor = torch.tensor(Xg)
+yg_tensor = torch.tensor(yg).unsqueeze(1)   # garder la cible
 
-Répond à la question :
+dataset_g = TensorDataset(torch.cat([Xg_tensor, yg_tensor], dim=1))
+loader_g = DataLoader(dataset_g, batch_size=1024, shuffle=True)
 
-> “Si j’entraîne un modèle sur les données synthétiques, est-ce qu’il fonctionne encore sur les vraies données ?”
+input_dim_g = Xg_tensor.shape [ppl-ai-file-upload.s3.amazonaws](https://ppl-ai-file-upload.s3.amazonaws.com/web/direct-files/attachments/215619752/6f809d65-56b5-4ca4-b2da-880f77cb1918/Projet_stage.ipynb?AWSAccessKeyId=ASIA2F3EMEYEZW6A7IHD&Signature=GnrlqHGxPIbRWF2sMOVj0r5OJiU%3D&x-amz-security-token=IQoJb3JpZ2luX2VjEBQaCXVzLWVhc3QtMSJHMEUCIQDgfjI%2FZxQU%2FX2FkRCeTJRc7JHZ6JyKpyEYdtMhVck5xQIgbfwxalJWp6AngR91%2B3utXjMq3Q%2Bv9liJph6M%2BPkuh3Eq%2FAQI3f%2F%2F%2F%2F%2F%2F%2F%2F%2F%2FARABGgw2OTk3NTMzMDk3MDUiDPqD75QZEbH%2B4QKw0SrQBLRz%2BPz%2BtnYMJhGkYv5usUcVj04pWItahwt4ql%2FuVqAQ04el2qpzjqMrX1mxOT3s62lIZNJxcDGtLU00m7Jg641WdImBukxCaQcYt4iTKWE0RTEVIYUaUftwe%2BGS8P5bfKrBwJqHxB%2FC6%2FHK5QMzZJ7hkqRvjSztLJEjJn515iIbRD1qct9G15im2EQTVI%2BPReg3bjmnRDeKgcuDgk9wTc%2Fj9AP%2B%2FLvdRyFgkFOSMJH%2F%2FyPAPSNBOsew4mo9YXsL%2FO1noghCDikPMFhNeiceEmwEeECqJEyd1YtoutxUDxC92fzZ%2BP1oDlJG9VBs%2FThgVLWkV0WJEq6gCFo023b%2Ba1dyg87s5%2BnrEH11IWZ4d5p4xj5G9H1W6lWFuZ6%2Fq9colEb21IB1qXD8lUH8hEQIx8TwB3Y8hrL7nE7xalK3EDDKi%2FR7mLT7lbzAN0OUaN4t367cgAjxRhgoJkcpQ3mFwBYKf64zqfL59%2By%2B1NFv3qf5QsG7K8DnsFVjcz5pSrZ7gBFn66t5O8OM%2FnnueCQElBlwfF4CYd38EySnI%2BZUsauvD%2FU2s7ofCrVgDdtecyPqAewpCUZAjIbU7wg7fGdJ5zFSP6JpuKMIOVkqcpRCfHrtoAszp%2BQ0QRqY30vcjKe5xndPt%2BchRasRjeWMxxDDLJ0RUXIyPu3umtVz6vjfOxs%2BebUqPPq3HNEZE9WzpXvjHIwNOIDwZ5LYqxEjsFJe6yoU1blMYZ7NHMwF1heG8j5MYdPf%2FKKAvnr5qA%2FkU41ttLmx8r72MvjEYhUTLW90KNEw0LvhzQY6mAEIp%2BD4T%2BAR6Foyb0qro28ezIRsk9cgM4Fid4B3X2dyjRNIsDtNOg0qvedTFgxDgR4UVWfPqpDvrOdlgbDOvVYhl4Af3iPndlMe6zT4UP3pWkOkBkzVON3dPzX7nwVJntlVQJrZqk1%2F%2BG%2FlAqWJo7VmDaLOw2W9aJiFON9%2FdsUMyuLa%2BGl%2BcWZMbzy2mA40BwqXQcGPYMFsXg%3D%3D&Expires=1773692710) + 1   # features + target
+latent_dim = 32
 
-## TRTS
+class SimpleVAE(nn.Module):
+    def __init__(self, input_dim, latent_dim):
+        super().__init__()
+        self.encoder = nn.Sequential(
+            nn.Linear(input_dim, 128),
+            nn.ReLU(),
+            nn.Linear(128, 64),
+            nn.ReLU()
+        )
+        self.mu = nn.Linear(64, latent_dim)
+        self.logvar = nn.Linear(64, latent_dim)
 
-Répond à la question :
+        self.decoder = nn.Sequential(
+            nn.Linear(latent_dim, 64),
+            nn.ReLU(),
+            nn.Linear(64, 128),
+            nn.ReLU(),
+            nn.Linear(128, input_dim)
+        )
 
-> “Si j’entraîne un modèle sur les vraies données, est-ce que les données synthétiques ressemblent assez aux vraies pour servir de jeu de test crédible ?”
+    def encode(self, x):
+        h = self.encoder(x)
+        return self.mu(h), self.logvar(h)
 
-Donc :
+    def reparameterize(self, mu, logvar):
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std)
+        return mu + eps * std
 
-* **k-anonymat / l-diversity = sécurité**
-* **TSTR / TRTS = utilité**
+    def decode(self, z):
+        return self.decoder(z)
 
-Et pour ton projet, tu as besoin des **deux**.
+    def forward(self, x):
+        mu, logvar = self.encode(x)
+        z = self.reparameterize(mu, logvar)
+        recon = self.decode(z)
+        return recon, mu, logvar
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+vae = SimpleVAE(input_dim_g, latent_dim).to(device)
 
-# 2. k-anonymat expliqué très simplement
+optimizer = torch.optim.Adam(vae.parameters(), lr=1e-3)
 
-## L’idée en une phrase
+def vae_loss(recon_x, x, mu, logvar):
+    recon_loss = nn.MSELoss()(recon_x, x)
+    kld = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
+    return recon_loss + kld
 
-Le **k-anonymat**, c’est faire en sorte qu’un individu soit **indistinguable d’au moins k−1 autres individus** dans la base.
+epochs = 30
 
-### Image mentale
+vae.train()
+for epoch in range(epochs):
+    total_loss = 0.0
+    for (batch,) in loader_g:
+        batch = batch.to(device)
+        optimizer.zero_grad()
+        recon, mu, logvar = vae(batch)
+        loss = vae_loss(recon, batch, mu, logvar)
+        loss.backward()
+        optimizer.step()
+        total_loss += loss.item() * batch.size(0)
+    print(f"Epoch {epoch+1}/{epochs} - Loss: {total_loss / len(loader_g.dataset):.4f}")
+```
 
-Imagine que quelqu’un essaie de te retrouver dans une foule.
+Temps: 10–20 minutes (30 epochs, 300k lignes, CPU).
 
-* S’il n’y a que **toi** qui correspond à “femme, 43 ans, vit dans telle zone, 2 enfants”, il te repère immédiatement.
-* Si ces caractéristiques correspondent à **10 personnes**, alors tu es “perdu dans un groupe de 10”.
+### 2.2. Génération de données synthétiques avec le VAE
 
-C’est exactement l’idée du k-anonymat :
+```python
+vae.eval()
+n_synth = len(train_data)
+batch_size = 1024
 
-> **chaque personne doit être cachée dans une foule d’au moins k personnes**.
+synth_batches = []
+with torch.no_grad():
+    for _ in range(int(np.ceil(n_synth / batch_size))):
+        z = torch.randn(batch_size, latent_dim).to(device)
+        out = vae.decode(z)
+        synth_batches.append(out.cpu())
 
+synth_full = torch.cat(synth_batches, dim=0)[:n_synth]
+synth_full = synth_full.numpy()
 
+# On inverse le standard scaling pour les features (sauf la cible)
+X_synth_scaled = synth_full[:, :-1]
+y_synth_raw = synth_full[:, -1]
 
-## Pourquoi ce n’est pas l’identifiant direct qui pose le plus problème
+X_synth = scaler_g.inverse_transform(X_synth_scaled)
+y_synth = (y_synth_raw > 0.5).astype(int)   # seuil pour la cible binaire
 
-Quand on pense anonymisation, on pense souvent à supprimer :
+cols_X = df_g.drop(columns=[target_col]).columns.tolist()
+synth_df = pd.DataFrame(X_synth, columns=cols_X)
+synth_df[target_col] = y_synth
 
-* nom,
-* prénom,
-* numéro client,
-* numéro de téléphone.
+synth_df.head()
+```
 
-Ça, c’est nécessaire, mais **ce n’est pas suffisant**.
+Tu peux considérer ce VAE comme ton “TVAE maison”. Pour un **CTGAN maison**, ce serait beaucoup plus long à coder (G + D, training adversarial, etc.) sans paquet.
 
-Le vrai danger vient souvent des **quasi-identifiants**.
+***
 
-## Quasi-identifiants
+### 2.3. Réseau de neurones prédictif sans Opacus (pas DP)
 
-Ce sont des variables qui ne nomment pas directement la personne, mais qui peuvent la rendre reconnaissable si on les combine.
+Un MLP simple pour ton scoring (sans privacy) :
 
-Par exemple :
+```python
+X_train_np = X_train.values.astype(np.float32)
+y_train_np = y_train.values.astype(np.int64)
+X_test_np = X_test.values.astype(np.float32)
+y_test_np = y_test.values.astype(np.int64)
 
-* âge,
-* sexe,
-* code postal,
-* situation familiale,
-* profession,
-* nombre d’enfants,
-* type de logement.
+scaler_clf = StandardScaler()
+X_train_np = scaler_clf.fit_transform(X_train_np)
+X_test_np = scaler_clf.transform(X_test_np)
 
-Sur une base bancaire, la combinaison :
+train_ds = TensorDataset(torch.tensor(X_train_np), torch.tensor(y_train_np))
+test_ds = TensorDataset(torch.tensor(X_test_np), torch.tensor(y_test_np))
 
-* 58 ans
-* cadre
-* veuf
-* 2 enfants
-* petite commune
+train_loader = DataLoader(train_ds, batch_size=1024, shuffle=True)
+test_loader = DataLoader(test_ds, batch_size=2048, shuffle=False)
 
-peut parfois suffire à reconnaître quelqu’un, surtout si un attaquant a déjà des infos externes.
+clf = MLP(X_train_np.shape [ppl-ai-file-upload.s3.amazonaws](https://ppl-ai-file-upload.s3.amazonaws.com/web/direct-files/attachments/215619752/6f809d65-56b5-4ca4-b2da-880f77cb1918/Projet_stage.ipynb?AWSAccessKeyId=ASIA2F3EMEYEZW6A7IHD&Signature=GnrlqHGxPIbRWF2sMOVj0r5OJiU%3D&x-amz-security-token=IQoJb3JpZ2luX2VjEBQaCXVzLWVhc3QtMSJHMEUCIQDgfjI%2FZxQU%2FX2FkRCeTJRc7JHZ6JyKpyEYdtMhVck5xQIgbfwxalJWp6AngR91%2B3utXjMq3Q%2Bv9liJph6M%2BPkuh3Eq%2FAQI3f%2F%2F%2F%2F%2F%2F%2F%2F%2F%2FARABGgw2OTk3NTMzMDk3MDUiDPqD75QZEbH%2B4QKw0SrQBLRz%2BPz%2BtnYMJhGkYv5usUcVj04pWItahwt4ql%2FuVqAQ04el2qpzjqMrX1mxOT3s62lIZNJxcDGtLU00m7Jg641WdImBukxCaQcYt4iTKWE0RTEVIYUaUftwe%2BGS8P5bfKrBwJqHxB%2FC6%2FHK5QMzZJ7hkqRvjSztLJEjJn515iIbRD1qct9G15im2EQTVI%2BPReg3bjmnRDeKgcuDgk9wTc%2Fj9AP%2B%2FLvdRyFgkFOSMJH%2F%2FyPAPSNBOsew4mo9YXsL%2FO1noghCDikPMFhNeiceEmwEeECqJEyd1YtoutxUDxC92fzZ%2BP1oDlJG9VBs%2FThgVLWkV0WJEq6gCFo023b%2Ba1dyg87s5%2BnrEH11IWZ4d5p4xj5G9H1W6lWFuZ6%2Fq9colEb21IB1qXD8lUH8hEQIx8TwB3Y8hrL7nE7xalK3EDDKi%2FR7mLT7lbzAN0OUaN4t367cgAjxRhgoJkcpQ3mFwBYKf64zqfL59%2By%2B1NFv3qf5QsG7K8DnsFVjcz5pSrZ7gBFn66t5O8OM%2FnnueCQElBlwfF4CYd38EySnI%2BZUsauvD%2FU2s7ofCrVgDdtecyPqAewpCUZAjIbU7wg7fGdJ5zFSP6JpuKMIOVkqcpRCfHrtoAszp%2BQ0QRqY30vcjKe5xndPt%2BchRasRjeWMxxDDLJ0RUXIyPu3umtVz6vjfOxs%2BebUqPPq3HNEZE9WzpXvjHIwNOIDwZ5LYqxEjsFJe6yoU1blMYZ7NHMwF1heG8j5MYdPf%2FKKAvnr5qA%2FkU41ttLmx8r72MvjEYhUTLW90KNEw0LvhzQY6mAEIp%2BD4T%2BAR6Foyb0qro28ezIRsk9cgM4Fid4B3X2dyjRNIsDtNOg0qvedTFgxDgR4UVWfPqpDvrOdlgbDOvVYhl4Af3iPndlMe6zT4UP3pWkOkBkzVON3dPzX7nwVJntlVQJrZqk1%2F%2BG%2FlAqWJo7VmDaLOw2W9aJiFON9%2FdsUMyuLa%2BGl%2BcWZMbzy2mA40BwqXQcGPYMFsXg%3D%3D&Expires=1773692710)).to(device)
+criterion = nn.CrossEntropyLoss()
+opt = torch.optim.Adam(clf.parameters(), lr=1e-3)
 
----
+epochs = 10
+for epoch in range(epochs):
+    clf.train()
+    total_loss = 0.0
+    for xb, yb in train_loader:
+        xb, yb = xb.to(device), yb.to(device)
+        opt.zero_grad()
+        logits = clf(xb)
+        loss = criterion(logits, yb)
+        loss.backward()
+        opt.step()
+        total_loss += loss.item() * xb.size(0)
+    print(f"Epoch {epoch+1}/{epochs} - Loss: {total_loss/len(train_ds):.4f}")
+```
 
-## Exemple très simple
+Temps: 5–10 minutes.
 
-Imaginons une mini-base :
+***
 
-| Âge | Sexe | Code postal | Défaut |
-| --- | ---- | ----------- | ------ |
-| 34  | F    | 75013       | 1      |
-| 35  | F    | 75013       | 0      |
-| 34  | M    | 75015       | 0      |
-| 61  | F    | 92100       | 1      |
-| 62  | F    | 92100       | 1      |
+### 2.4. Differential privacy “maison” (bricolage minimal)
 
-Si quelqu’un sait qu’une personne est :
+Sans Opacus, tu ne peux pas facilement garantir un \(\epsilon\) théorique propre, mais tu peux illustrer l’idée: ajouts de bruit sur les gradients ou sur les poids.
 
-* une femme,
-* autour de 61–62 ans,
-* vivant à 92100,
+Exemple minimal: bruit gaussien sur les gradients (non rigoureux, mais pédagogique).
 
-alors il retrouve presque sûrement la ligne correspondante.
+```python
+noise_std = 1e-3   # à ajuster
 
-### Pour obtenir du k-anonymat
+for epoch in range(epochs):
+    clf.train()
+    total_loss = 0.0
+    for xb, yb in train_loader:
+        xb, yb = xb.to(device), yb.to(device)
+        opt.zero_grad()
+        logits = clf(xb)
+        loss = criterion(logits, yb)
+        loss.backward()
 
-On peut **généraliser** les variables :
+        # ajout de bruit sur les gradients
+        with torch.no_grad():
+            for p in clf.parameters():
+                if p.grad is not None:
+                    p.grad += noise_std * torch.randn_like(p.grad)
 
-| Âge   | Sexe | Code postal | Défaut |
-| ----- | ---- | ----------- | ------ |
-| 30-39 | F    | 7501*       | 1      |
-| 30-39 | F    | 7501*       | 0      |
-| 30-39 | M    | 7501*       | 0      |
-| 60-69 | F    | 9210*       | 1      |
-| 60-69 | F    | 9210*       | 1      |
+        opt.step()
+        total_loss += loss.item() * xb.size(0)
+    print(f"[DP-approx] Epoch {epoch+1}/{epochs} - Loss: {total_loss/len(train_ds):.4f}")
+```
 
-Ici, les personnes sont moins précises. On forme des groupes de profils similaires.
+Ce n’est **pas** une implémentation formelle de differential privacy, mais ça illustre la mécanique “gradient + bruit”.
 
-Si chaque combinaison des quasi-identifiants apparaît au moins 2 fois, on a du **2-anonymat**.
-Si elle apparaît au moins 5 fois, on a du **5-anonymat**.
+***
 
----
+### 2.5. k‑anonymat / l‑diversity sans package (déjà vu plus haut)
 
-## Définition simple
+Le bloc pandas donné en 1.7 fonctionne sans package externe.
 
-Une base est **k-anonyme** si pour chaque combinaison de quasi-identifiants, il existe **au moins k enregistrements identiques sur ces quasi-identifiants**.
+***
 
-On appelle souvent ces groupes des **classes d’équivalence**.
+## 3. Estimation synthétique des temps d’exécution
 
-### Classe d’équivalence
+| Bloc | Version | Temps approximatif |
+|------|---------|--------------------|
+| Installation packages | avec packages | 5–10 min |
+| Préparation df / split | les deux | < 1 min |
+| CTGAN (epochs=50–100) | avec packages | 15–40 min |
+| TVAE (epochs=50–100) | avec packages | 10–30 min |
+| Naive Bayes + TSTR | les deux | < 1 min |
+| MLP DP (Opacus) | avec packages | 5–15 min |
+| VAE tabulaire maison | sans packages | 10–20 min |
+| MLP scoring sans DP | sans packages | 5–10 min |
+| k-anonymat / l-diversity | les deux | < 1 min |
 
-C’est simplement :
+Sur un laptop pro standard (CPU, pas de GPU), prends une **marge large**: 2–3h pour tout lancer proprement (pas forcément en une seule fois).
 
-> le groupe de lignes qui ont les mêmes valeurs sur les quasi-identifiants après anonymisation.
-
-Par exemple, toutes les lignes avec :
-
-* âge = 30–39,
-* sexe = F,
-* code postal = 7501*
-
-forment une classe d’équivalence.
-
-Le k-anonymat exige que la taille de chaque classe soit ≥ k.
-
-
-
-## Comment on obtient le k-anonymat en pratique
-
-Il y a deux leviers principaux :
-
-### 1. Généralisation
-
-On remplace une valeur précise par une valeur plus large.
-
-Exemples :
-
-* âge 34 → tranche 30–39
-* code postal 75013 → 7501*
-* revenu exact → classe de revenu
-
-### 2. Suppression
-
-On retire certaines valeurs ou certaines lignes trop identifiantes.
-
-Exemples :
-
-* supprimer une profession très rare,
-* supprimer les individus extrêmes,
-* masquer un champ.
-
----
-
-## Ce que protège le k-anonymat
-
-Le k-anonymat protège surtout contre la **réidentification par chaînage**.
-
-Exemple :
-
-* un attaquant connaît l’âge, la ville et le sexe d’une personne,
-* il croise avec la base anonymisée,
-* si une seule ligne correspond, la personne est retrouvée.
-
-Avec le k-anonymat, il ne peut pas isoler une ligne unique : il tombe sur un groupe d’au moins k personnes.
-
----
-
-## Limite intuitive du k-anonymat
-
-Le k-anonymat peut te cacher dans un groupe… mais si **tout le groupe a la même information sensible**, alors on apprend quand même quelque chose sur toi.
-
-### Exemple
-
-Supposons qu’un groupe de 10 personnes partage les mêmes quasi-identifiants, et que dans ce groupe :
-
-* les 10 ont `Défaut = 1`
-
-Alors même si on ne sait pas exactement quelle ligne est la tienne, on peut conclure :
-
-> “Cette personne est très probablement en défaut.”
-
-Tu es anonyme au sens de l’identité, mais **pas protégé au sens de l’attribut sensible**.
-
-C’est précisément là qu’intervient **l-diversity**.
-
----
-
-# 3. l-diversity expliqué très simplement
-
-## L’idée en une phrase
-
-La **l-diversity** impose que dans chaque groupe anonyme, il y ait **suffisamment de diversité sur l’information sensible**.
-
-### Image mentale
-
-Le k-anonymat dit :
-
-> “Tu es caché dans une foule.”
-
-La l-diversity ajoute :
-
-> “Et dans cette foule, tout le monde ne porte pas le même secret.”
-
----
-
-## Exemple simple
-
-Imaginons une classe d’équivalence de 5 personnes :
-
-| Âge   | Sexe | Zone  | Défaut |
-| ----- | ---- | ----- | ------ |
-| 40-49 | F    | 7501* | 1      |
-| 40-49 | F    | 7501* | 1      |
-| 40-49 | F    | 7501* | 1      |
-| 40-49 | F    | 7501* | 1      |
-| 40-49 | F    | 7501* | 1      |
-
-Cette classe est bien **5-anonyme**.
-
-Mais elle n’est pas du tout protectrice sur la variable sensible `Défaut`, car tout le monde a la même valeur.
-
-Maintenant :
-
-| Âge   | Sexe | Zone  | Défaut |
-| ----- | ---- | ----- | ------ |
-| 40-49 | F    | 7501* | 1      |
-| 40-49 | F    | 7501* | 0      |
-| 40-49 | F    | 7501* | 1      |
-| 40-49 | F    | 7501* | 0      |
-| 40-49 | F    | 7501* | 0      |
-
-Ici, le groupe contient au moins **2 valeurs sensibles différentes** (`0` et `1`).
-On pourrait dire qu’il a au moins une **2-diversity** sur la variable `Défaut`.
-
----
-
-## Définition intuitive
-
-Une base est **l-diverse** si, dans chaque classe d’équivalence, l’attribut sensible possède au moins **l valeurs “bien représentées”** ou suffisamment variées.
-
-En version très simple :
-
-* **k-anonymat** : “on ne peut pas te isoler”
-* **l-diversity** : “on ne peut pas trop deviner ton information sensible”
-
----
-
-## Dans ton projet, quelle peut être l’information sensible ?
-
-Dans un cadre bancaire ou crédit, cela peut être :
-
-* la cible `TARGET` (défaut / non-défaut),
-* une classe de revenu,
-* un niveau d’endettement,
-* une catégorie socio-économique,
-* une variable très sensible si elle existe.
-
-Pour **Home Credit**, la variable sensible la plus naturelle dans ton contexte de scoring est souvent **la cible `TARGET`**, parce qu’elle représente directement une information financière délicate.
-
-Mais attention :
-dans un vrai projet, le choix de l’attribut sensible dépend du **risque métier et réglementaire**. Ce n’est pas forcément uniquement la cible.
-
----
-
-# 4. Pourquoi k-anonymat et l-diversity sont importants pour toi
-
-Dans ton stage, tu veux probablement démontrer que ton pipeline de données synthétiques :
-
-* ne recopie pas les individus réels,
-* ne permet pas d’inférer trop facilement des informations privées,
-* reste utile pour l’apprentissage du risque de crédit.
-
-Donc :
-
-## k-anonymat
-
-te sert à montrer :
-
-> “On ne peut pas facilement réidentifier un individu à partir de ses caractéristiques quasi-identifiantes.”
-
-## l-diversity
-
-te sert à montrer :
-
-> “Même si un individu appartient à un petit groupe homogène, on ne peut pas déduire trop facilement sa variable sensible.”
-
-Ces deux notions sont particulièrement utiles pour la partie :
-
-* **confidentialité**,
-* **anonymisation**,
-* **risque de réidentification**.
-
-Elles sont moins directement des métriques de performance ML, mais elles sont essentielles pour prouver la **robustesse privacy** de ta méthodologie.
-
----
-
-# 5. TSTR expliqué très simplement
-
-## Signification
-
-**TSTR = Train on Synthetic, Test on Real**
-
-En français :
-
-> on entraîne le modèle sur des données synthétiques, puis on le teste sur les vraies données.
-
----
-
-## L’idée en une phrase
-
-TSTR sert à répondre à la question :
-
-> “Les données synthétiques contiennent-elles suffisamment de vraie structure statistique pour apprendre quelque chose d’utile sur le monde réel ?”
-
-### Image mentale
-
-Imagine que les données synthétiques sont un **simulateur de pilotage**.
-
-Tu t’entraînes sur le simulateur, puis tu vas piloter un vrai avion.
-
-La question TSTR, c’est :
-
-> “Est-ce que l’entraînement sur le simulateur t’a appris quelque chose qui fonctionne dans le réel ?”
-
-Si oui, alors le simulateur était réaliste et utile.
-
----
-
-## Dans ton projet
-
-Tu génères une base synthétique à partir de Home Credit.
-
-Ensuite :
-
-1. tu entraînes, par exemple, une régression logistique ou un XGBoost sur la base synthétique ;
-2. tu évalues ce modèle sur un **jeu réel**.
-
-Si le modèle garde une bonne AUC sur le réel, cela signifie que :
-
-* les relations utiles entre `X` et `TARGET` ont été préservées,
-* les données synthétiques ne sont pas juste “jolies”, elles sont **informatives**.
-
----
-
-## Intuition
-
-Si les données synthétiques sont mauvaises :
-
-* elles peuvent avoir des distributions qui “ressemblent” visuellement,
-* mais perdre les vraies dépendances entre variables,
-* ou casser le lien entre les variables explicatives et le défaut.
-
-Dans ce cas :
-
-* le modèle appris sur synthétique testera mal sur réel,
-* la performance TSTR sera faible.
-
-Donc TSTR est une mesure de **transférabilité vers le réel**.
-
----
-
-# 6. TRTS expliqué très simplement
-
-## Signification
-
-**TRTS = Train on Real, Test on Synthetic**
-
-En français :
-
-> on entraîne le modèle sur les vraies données, puis on le teste sur les données synthétiques.
-
----
-
-## L’idée en une phrase
-
-TRTS sert à répondre à la question :
-
-> “Les données synthétiques ressemblent-elles assez aux vraies pour être un bon banc d’essai ?”
-
-### Image mentale
-
-Cette fois, tu apprends à conduire sur une vraie route, puis on te met sur un circuit artificiel.
-
-La question est :
-
-> “Est-ce que ce circuit artificiel ressemble suffisamment à la vraie route pour que les performances soient cohérentes ?”
-
----
-
-## Dans ton projet
-
-Tu entraînes un modèle sur les vraies données, puis tu mesures ses performances sur le synthétique.
-
-Si le score reste cohérent, cela suggère que :
-
-* le synthétique respecte bien la géométrie prédictive du réel,
-* la répartition des cas faciles / difficiles est plausible,
-* les exemples synthétiques ne sont pas complètement hors distribution.
-
----
-
-# 7. Différence simple entre TSTR et TRTS
-
-## TSTR
-
-**Train synthétique → test réel**
-
-Question :
-
-> “Est-ce que le synthétique est assez bon pour apprendre ?”
-
-Donc TSTR mesure surtout :
-
-* la **valeur d’entraînement** du synthétique,
-* sa capacité à remplacer partiellement le réel pour la phase d’apprentissage.
-
-## TRTS
-
-**Train réel → test synthétique**
-
-Question :
-
-> “Est-ce que le synthétique est assez réaliste pour servir de terrain d’évaluation ?”
-
-Donc TRTS mesure surtout :
-
-* la **fidélité distributionnelle / prédictive** du synthétique,
-* sa crédibilité comme échantillon ressemblant au réel.
-
----
-
-# 8. Résumé ultra simple avec une métaphore unique
-
-Imagine que les données synthétiques sont une **maquette d’une ville**.
-
-## k-anonymat
-
-Dans la maquette, aucune maison ne permet de reconnaître immédiatement une vraie famille.
-
-## l-diversity
-
-Même si on repère un petit quartier, on ne peut pas déduire que tous ses habitants ont exactement la même situation sensible.
-
-## TSTR
-
-On forme un livreur dans la maquette, puis on l’envoie dans la vraie ville.
-S’il s’en sort bien, la maquette est utile pour l’apprentissage.
-
-## TRTS
-
-On forme un livreur dans la vraie ville, puis on l’évalue dans la maquette.
-S’il se comporte de façon cohérente, la maquette ressemble bien à la réalité.
-
----
-
-# 9. Version plus rigoureuse et statistique : k-anonymat
-
-Passons maintenant à une formulation plus propre, plus “rapport de stage / mémoire”.
-
-## Définition formelle
-
-Soit :
-
-* une table de données,
-* un ensemble de **quasi-identifiants** (Q).
-
-La table satisfait le **k-anonymat** si chaque combinaison de valeurs de (Q) apparaît dans **au moins k enregistrements**.
-
-Autrement dit, si on partitionne la base selon les quasi-identifiants, chaque **classe d’équivalence** a une cardinalité d’au moins (k).
-
-### Formellement
-
-Pour toute classe d’équivalence (E),
-[
-|E| \ge k
-]
-
----
-
-## Interprétation probabiliste
-
-Si un attaquant sait qu’un individu appartient à une classe d’équivalence (E), et qu’il ne peut pas distinguer les membres de cette classe, alors la probabilité de réidentifier correctement cet individu est au mieux :
-
-[
-P(\text{réidentification correcte}) \le \frac{1}{k}
-]
-
-C’est une borne intuitive, sous hypothèse d’équiprobabilité au sein du groupe.
-
-### Exemple
-
-* si (k = 2), risque au plus (1/2),
-* si (k = 5), risque au plus (1/5),
-* si (k = 10), risque au plus (1/10).
-
-En pratique, cette borne est simplifiée, car un attaquant peut avoir des informations auxiliaires supplémentaires. Mais elle donne une intuition claire.
-
----
-
-## Effet sur l’information
-
-Le k-anonymat diminue la précision des données :
-
-* généralisation,
-* recodage,
-* suppression.
-
-Donc il crée un **compromis privacy-utilité** :
-
-* plus (k) est grand,
-* plus la réidentification devient difficile,
-* mais plus on dégrade potentiellement l’information utile au modèle.
-
-Dans ton projet, c’est fondamental :
-un k trop faible → protection insuffisante,
-un k trop grand → signal prédictif trop écrasé.
-
----
-
-# 10. Limites statistiques du k-anonymat
-
-Le k-anonymat protège contre l’identification, mais pas contre l’**inférence d’attribut sensible**.
-
-Deux faiblesses classiques :
-
-## 1. Homogeneity attack
-
-Si tous les individus d’une classe ont la même valeur sensible, connaître la classe suffit à connaître cette valeur.
-
-Exemple :
-[
-P(S=1 \mid E)=1
-]
-où (S) est l’attribut sensible et (E) la classe d’équivalence.
-
-Dans ce cas, même si l’identité exacte n’est pas connue, l’information sensible est révélée.
-
-## 2. Background knowledge attack
-
-Même s’il y a plusieurs valeurs sensibles, des connaissances externes peuvent réduire l’incertitude.
-
-Exemple :
-dans une classe avec trois valeurs possibles, si un attaquant sait déjà que la personne n’appartient pas à deux catégories, il déduit la troisième.
-
----
-
-# 11. Version plus rigoureuse et statistique : l-diversity
-
-## Idée formelle
-
-La l-diversity a été proposée pour corriger la faiblesse du k-anonymat sur l’attribut sensible.
-
-Une classe d’équivalence satisfait une forme simple de **l-diversity** si elle contient au moins (l) valeurs sensibles distinctes.
-
-### Version de base
-
-Pour toute classe (E),
-[
-|{s : s \in S(E)}| \ge l
-]
-
-où (S(E)) est l’ensemble des valeurs sensibles présentes dans (E).
-
----
-
-## Interprétation probabiliste
-
-L’objectif est que, même après avoir identifié la classe d’équivalence d’un individu, l’incertitude sur sa valeur sensible reste suffisamment élevée.
-
-Autrement dit, on veut éviter que :
-[
-P(S=s \mid E)
-]
-soit trop concentrée sur une seule valeur.
-
-La l-diversity essaie donc de maintenir une certaine **entropie** ou au moins une certaine **variété** des valeurs sensibles dans chaque groupe.
-
----
-
-## Différentes variantes
-
-Dans la littérature, il y a plusieurs formes :
-
-### Distinct l-diversity
-
-Au moins (l) valeurs sensibles distinctes.
-
-### Entropy l-diversity
-
-L’entropie de la distribution des valeurs sensibles dans la classe doit être suffisamment grande.
-
-On cherche quelque chose du type :
-[
-H(S \mid E) \ge \log(l)
-]
-
-avec
-[
-H(S \mid E) = -\sum_s P(s \mid E)\log P(s \mid E)
-]
-
-### Recursive (c,l)-diversity
-
-Version plus stricte pour éviter qu’une valeur domine trop même si plusieurs valeurs distinctes existent.
-
----
-
-## Intuition statistique importante
-
-Avoir 2 valeurs distinctes ne suffit pas toujours.
-
-Exemple :
-dans une classe,
-
-* 99 % ont `TARGET=0`
-* 1 % ont `TARGET=1`
-
-Techniquement, il y a 2 valeurs distinctes.
-Mais la classe reste très peu protectrice, car on peut presque deviner la valeur majoritaire.
-
-Donc la l-diversity simple est mieux que le k-anonymat seul, mais elle a aussi ses limites.
-
----
-
-# 12. Limites de l-diversity
-
-## 1. Skewness problem
-
-Si la distribution globale est très déséquilibrée, imposer l-diversity peut être trompeur.
-
-Exemple en crédit :
-si le taux de défaut réel est de 8 %, alors avoir une classe avec 2 modalités n’implique pas forcément une bonne protection.
-
-## 2. Semantic similarity problem
-
-Même si les valeurs sont différentes, elles peuvent être très proches sémantiquement.
-
-Exemple :
-
-* “retard léger”
-* “retard modéré”
-* “retard sévère”
-
-Il y a de la diversité nominale, mais pas forcément de vraie diversité informative.
-
-C’est pour cela qu’en théorie on parle parfois aussi de **t-closeness**, qui compare la distribution sensible dans chaque groupe à la distribution globale.
-
-Pour ton stage, tu n’es pas obligé d’aller jusque-là, mais le mentionner montre que tu comprends les limites du cadre.
-
----
-
-# 13. TSTR en version plus statistique
-
-## Définition
-
-On dispose :
-
-* d’un dataset réel (D_r),
-* d’un dataset synthétique (D_s),
-* d’une tâche prédictive, ici le scoring de défaut.
-
-En TSTR :
-
-1. on entraîne un modèle (f_s) sur (D_s^{train}),
-2. on l’évalue sur (D_r^{test}).
-
-On mesure ensuite une métrique, par exemple :
-
-* AUC,
-* Gini,
-* log-loss,
-* KS,
-* Brier score.
-
----
-
-## Que mesure réellement TSTR ?
-
-TSTR mesure à quel point les données synthétiques préservent :
-
-[
-P(Y \mid X)
-]
-
-ou au moins une approximation utile du lien entre variables explicatives (X) et cible (Y).
-
-C’est très important : un bon synthétique ne doit pas seulement reproduire (P(X)), la distribution marginale des variables,
-il doit aussi préserver la **structure prédictive**.
-
-Autrement dit, ce n’est pas suffisant que :
-
-* les âges ressemblent,
-* les revenus ressemblent,
-* les fréquences des catégories ressemblent.
-
-Il faut aussi que :
-
-* les combinaisons de variables associées au défaut soient plausibles,
-* les dépendances entre variables soient cohérentes,
-* la frontière de décision apprise sur synthétique reste valable sur réel.
-
----
-
-## Interprétation des résultats TSTR
-
-Supposons :
-
-* AUC entraînement réel → test réel : 0,75
-* AUC entraînement synthétique → test réel : 0,72
-
-Alors le synthétique a conservé une grande partie du signal.
-
-Supposons au contraire :
-
-* AUC réel-réel : 0,75
-* AUC synthétique-réel : 0,58
-
-Alors les données synthétiques ont probablement :
-
-* lissé ou détruit certaines dépendances,
-* mal reproduit les interactions,
-* introduit du bruit structurel,
-* ou généré des observations peu réalistes.
-
----
-
-## Très bon point pour ton stage
-
-TSTR est souvent l’un des **meilleurs arguments** pour défendre l’intérêt des données synthétiques dans un cadre métier.
-
-Pourquoi ?
-Parce qu’il répond directement à la question opérationnelle :
-
-> “Est-ce qu’on peut apprendre quelque chose d’utile avec ces données ?”
-
-C’est beaucoup plus convaincant qu’une simple comparaison de moyennes ou d’histogrammes.
-
----
-
-# 14. TRTS en version plus statistique
-
-## Définition
-
-En TRTS :
-
-1. on entraîne un modèle (f_r) sur (D_r^{train}),
-2. on le teste sur (D_s^{test}).
-
-On mesure de nouveau une métrique de performance.
-
----
-
-## Que mesure réellement TRTS ?
-
-TRTS ne mesure pas exactement la même chose que TSTR.
-
-Il évalue si les données synthétiques se comportent comme un échantillon crédible vis-à-vis d’un modèle appris sur le réel.
-
-Cela renseigne sur la proximité entre les distributions réelles et synthétiques, à la fois :
-
-* sur (P(X)),
-* et sur la relation entre (X) et (Y).
-
-On peut le voir comme une mesure de **compatibilité du synthétique avec un modèle réel**.
-
----
-
-## Interprétation
-
-Si un modèle entraîné sur réel a une bonne performance sur synthétique, alors les données synthétiques ne sont pas absurdes du point de vue prédictif.
-
-Mais attention :
-TRTS seul peut être trompeur si les données synthétiques sont trop faciles ou trop propres.
-
-Exemple :
-si le générateur produit des cas “stéréotypés”, très bien séparés, un modèle réel peut très bien performer dessus, alors que ces données ne sont pas réalistes.
-
-Donc :
-
-* **TSTR est souvent plus exigeant** pour démontrer l’utilité d’apprentissage,
-* **TRTS est complémentaire** pour démontrer la cohérence du synthétique.
-
----
-
-# 15. Pourquoi TSTR et TRTS ne disent pas exactement la même chose
-
-C’est un point important à bien comprendre.
-
-Même si les deux semblent symétriques, ils testent des choses différentes.
-
-## TSTR
-
-Teste la capacité du synthétique à servir de **source d’apprentissage**.
-
-Il répond davantage à :
-[
-\text{Le signal appris sur } D_s \text{ se transfère-t-il vers } D_r ?
-]
-
-## TRTS
-
-Teste la capacité du synthétique à servir de **miroir du réel**.
-
-Il répond davantage à :
-[
-\text{Le comportement appris sur } D_r \text{ reste-t-il cohérent sur } D_s ?
-]
-
-Donc dans ton rapport, tu peux dire :
-
-* **TSTR** évalue l’**utilité en entraînement**,
-* **TRTS** évalue la **fidélité du synthétique comme distribution de test**.
-
----
-
-# 16. Ce qu’il faut absolument éviter comme mauvaise interprétation
-
-## Erreur 1
-
-“Si mes distributions marginales sont proches, mes données synthétiques sont bonnes.”
-
-Pas forcément.
-Tu peux très bien avoir :
-
-* bons histogrammes,
-* mauvaises corrélations,
-* mauvaise structure conditionnelle,
-* mauvais TSTR.
-
-## Erreur 2
-
-“Si j’ai un bon k-anonymat, ma confidentialité est réglée.”
-
-Non.
-Le k-anonymat ne protège pas suffisamment contre l’inférence d’attribut sensible.
-
-## Erreur 3
-
-“Si TRTS est bon, alors le synthétique est automatiquement excellent.”
-
-Non.
-Il faut le croiser avec :
-
-* TSTR,
-* comparaisons de distributions,
-* corrélations,
-* éventuellement risque de proximité avec les données réelles.
-
----
-
-# 17. Comment intégrer ça proprement dans ton projet
-
-Je te conseille de présenter ces notions comme **quatre briques complémentaires**.
-
-## Brique 1 : confidentialité structurelle
-
-Avec :
-
-* k-anonymat,
-* l-diversity.
-
-Objectif :
-montrer que les individus ne sont ni facilement réidentifiables, ni trop exposés sur leurs attributs sensibles.
-
-## Brique 2 : fidélité statistique
-
-Avec :
-
-* comparaison des distributions univariées,
-* corrélations,
-* dépendances entre variables,
-* éventuellement tests statistiques ou distances.
-
-## Brique 3 : utilité prédictive
-
-Avec :
-
-* TSTR,
-* TRTS,
-* comparaison aux performances réel-réel.
-
-## Brique 4 : compromis privacy / utility
-
-Montrer que :
-
-* plus on protège,
-* plus on peut perdre en information,
-* et qu’il faut un compromis acceptable pour un usage bancaire responsable.
-
----
-
-# 18. Comment tu peux le dire simplement dans un mémoire ou à l’oral
-
-Tu peux dire quelque chose comme :
-
-> Le k-anonymat cherche à empêcher l’identification d’un individu en garantissant que chaque profil observé correspond à au moins k individus. Cependant, cette propriété ne suffit pas si tous les individus d’un même groupe partagent la même information sensible. La l-diversity complète donc le k-anonymat en imposant une diversité minimale des attributs sensibles au sein de chaque groupe.
-> En parallèle, la qualité opérationnelle des données synthétiques peut être évaluée par TSTR et TRTS. TSTR mesure la capacité des données synthétiques à servir de support d’apprentissage pour des modèles testés ensuite sur les données réelles. TRTS mesure la cohérence prédictive des données synthétiques lorsqu’elles sont utilisées comme jeu de test pour un modèle entraîné sur les données réelles.
-> L’ensemble permet d’évaluer simultanément la confidentialité et l’utilité des données synthétiques dans un contexte de scoring de crédit.
-
----
-
-# 19. Quelle lecture “métier scoring” tu peux en tirer
-
-Dans un projet de scoring, ton enjeu n’est pas seulement de “faire du synthétique”, mais de prouver que le synthétique est :
-
-## suffisamment sécurisé
-
-pour qu’il ne mette pas en danger les clients,
-
-## suffisamment réaliste
-
-pour qu’un analyste risque, un data scientist ou un auditeur puisse l’utiliser,
-
-## suffisamment prédictif
-
-pour que les conclusions sur la performance des modèles restent crédibles.
-
-Donc :
-
-* **k-anonymat / l-diversity** disent :
-  “les clients sont protégés”
-
-* **TSTR / TRTS** disent :
-  “les données restent utiles pour le scoring”
-
-C’est exactement la logique de ton stage.
-
----
-
-# 20. Résumé final ultra clair
-
-## k-anonymat
-
-Une personne doit être confondue avec au moins (k-1) autres personnes sur les quasi-identifiants.
-But : limiter la réidentification.
-
-## l-diversity
-
-Dans chaque groupe anonyme, l’information sensible doit rester suffisamment variée.
-But : éviter qu’on déduise trop facilement un attribut sensible.
-
-## TSTR
-
-On entraîne sur synthétique, on teste sur réel.
-But : vérifier que les données synthétiques préservent le signal prédictif utile.
-
-## TRTS
-
-On entraîne sur réel, on teste sur synthétique.
-But : vérifier que les données synthétiques ressemblent suffisamment au réel pour être un support d’évaluation crédible.
-
----
-
-# 21. ton projet
-
-
-1. **Pourquoi protéger ?**
-   → risque de réidentification et d’inférence
-
-2. **k-anonymat**
-   → protection contre l’identification
-
-3. **l-diversity**
-   → protection contre la divulgation d’attribut sensible
-
-4. **Pourquoi ça ne suffit pas ?**
-   → il faut aussi que les données restent utiles
-
-5. **TSTR**
-   → utilité pour l’apprentissage
-
-6. **TRTS**
-   → fidélité du synthétique comme jeu d’évaluation
-
-7. **Conclusion**
-   → compromis confidentialité / utilité
-
+***
