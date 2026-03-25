@@ -1,0 +1,111 @@
+Version 1 — épurée :
+
+"Comment capturer et interpréter les performances d'un modèle de scoring de crédit construit à partir de données synthétiques anonymisées ?"
+
+Version 2 — plus complète :
+
+"Comment mesurer et interpréter les performances d'un modèle de scoring de crédit lorsque les données d'entraînement sont synthétiques et anonymisées — et que nous disent réellement les métriques comme l'AUC ou le Gini dans ce contexte ?"
+
+Version 3 — la plus percutante à l'oral :
+
+"Au-delà du chiffre : comment capturer et interpréter la performance d'un modèle de scoring entraîné sur des données synthétiques anonymisées ?"
+
+Slide 1 — Titre (30 secondes)
+
+"Bonjour à tous. Je vais vous présenter aujourd'hui mon projet de stage, qui s'articule autour d'une question centrale dans notre métier : peut-on faire confiance à des données que personne n'a jamais vécues ? C'est la question des données synthétiques appliquées au scoring de crédit."
+
+
+Slide 2 — Sommaire (30 secondes)
+
+"La présentation est structurée en cinq temps. On commence par comprendre pourquoi ce sujet est pertinent dans un contexte bancaire, on pose la problématique, on détaille les trois objectifs du projet, on rentre dans le cœur du sujet avec les modèles génératifs et la confidentialité, et on termine sur l'avancement concret."
+
+
+Slide 3 — Contexte (2 minutes)
+
+"Commençons par le contexte. Nous travaillons tous avec des données de crédit. Ces données ont une caractéristique fondamentale : elles sont sensibles. Un dossier de crédit, c'est le revenu d'une personne, sa situation familiale, son historique de remboursement. La RGPD et l'IA Act encadrent très strictement leur usage.
+Or, pour tester de nouvelles approches, former des modèles, ou simplement collaborer, il faut souvent des données. C'est là que la synthèse de données entre en jeu : l'idée de créer des données artificielles qui imitent les vraies, sans exposer les vraies personnes.
+Pour ce projet, je pars de la base publique Home Credit sur Kaggle : plus de 300 000 clients, 122 variables, et une cible binaire — défaut ou non-défaut — avec un taux de défaut d'environ 8 %, ce qui est représentatif d'un vrai portefeuille bancaire."
+
+
+Slide 4 — Problématique (1 minute 30)
+
+"Voici la question centrale du projet, formulée clairement :
+'Peut-on construire des données synthétiques suffisamment réalistes et sécurisées pour entraîner des modèles de scoring de crédit performants, tout en préservant la confidentialité des individus ?'
+Derrière cette question, il y en a trois plus précises : est-ce que les données synthétiques gardent la structure statistique des vraies données ? Est-ce qu'un modèle entraîné dessus reste pertinent sur du réel ? Et est-ce que les individus originaux sont vraiment protégés ?"
+
+
+Slide 5 — Les 3 objectifs (2 minutes)
+
+"Pour répondre à cette problématique, le projet est organisé en trois objectifs.
+Le premier, sur lequel je suis principalement positionné : générer des données synthétiques réalistes et évaluer leur robustesse face aux risques de confidentialité. C'est le cœur de mon travail.
+Le deuxième : entraîner des modèles de scoring sur ces données synthétiques et comparer leurs performances avec ceux entraînés sur données réelles.
+Le troisième : analyser et expliquer scientifiquement les résultats, les métriques, les écarts. Pas juste dire 'ça marche' ou 'ça ne marche pas', mais comprendre pourquoi.
+Les objectifs 2 et 3 seront présentés dans une session complémentaire avec l'autre stagiaire."
+
+
+Slide 6 — Pipeline (1 minute 30)
+
+"Voici une vue d'ensemble de la chaîne méthodologique. On part des données réelles, on les prépare, on génère plusieurs versions synthétiques avec différents modèles, on évalue la qualité de ces données, et on entraîne dessus des modèles de scoring.
+Mon travail se concentre sur les étapes 3 et 4 — génération et évaluation. Mais l'intérêt de cette chaîne, c'est qu'elle est pensée de bout en bout : chaque étape alimente la suivante."
+
+
+Slide 7 — CTGAN (3 minutes)
+
+"Le premier modèle que j'explore est le CTGAN — Conditional Tabular GAN. C'est un réseau de neurones génératif adversarial, adapté aux données tabulaires.
+Le principe d'un GAN : deux réseaux s'affrontent. Le Générateur crée des données synthétiques. Le Discriminateur essaie de distinguer les vraies données des fausses. En s'entraînant l'un contre l'autre, le générateur devient de plus en plus convaincant.
+Ce qui distingue le CTGAN des GAN classiques, c'est sa gestion des données tabulaires : variables mixtes numériques et catégorielles, et un mécanisme appelé 'Mode Sampling' qui permet de gérer les distributions très déséquilibrées comme notre 8 % de défauts.
+Ses atouts pour notre projet : il préserve bien les corrélations entre variables, et la bibliothèque SDV qui l'implémente est mature. Ses limites : l'entraînement peut être instable — c'est un problème bien connu des GAN — et il y a un risque de mémorisation si on ne fait pas attention."
+
+
+Slide 8 — TVAE (3 minutes)
+
+"Le TVAE est le second modèle. Il repose sur une logique complètement différente : les autoencodeurs variationnels.
+Ici, pas de compétition. Le réseau apprend à compresser les données dans un espace de représentation dit 'espace latent', puis à les reconstruire. La partie 'variationelle' force cet espace à être continu et probabiliste : on peut ensuite y échantillonner des points pour générer de nouvelles données.
+L'avantage principal : l'entraînement est beaucoup plus stable que CTGAN. Le TVAE est aussi souvent plus rapide à converger. En revanche, il a tendance à 'lisser' les distributions — il génère des données dans la moyenne, ce qui peut nuire à la représentation des cas rares comme les défauts."
+
+
+Slide 9 — Modèle Bayésien (2 minutes)
+
+"Le troisième modèle, et celui que j'ai déjà testé, est le modèle bayésien — typiquement un réseau bayésien de type PrivBayes.
+L'idée est différente des deux précédents : au lieu d'un réseau de neurones, on modélise les dépendances entre variables sous forme d'un graphe probabiliste. Chaque nœud représente une variable, les arcs représentent les relations conditionnelles.
+Son rôle dans ce projet est avant tout celui d'une référence, d'un benchmark. Il est plus simple, plus interprétable, et ses fondements statistiques sont solides. Sa limite principale : il passe difficilement à l'échelle sur 122 variables, et il est moins expressif pour les relations complexes.
+Mais c'est précisément cette comparaison qui est intéressante : est-ce qu'un modèle plus simple, plus contrôlable, peut rivaliser avec des architectures de deep learning pour notre cas d'usage ?"
+
+
+Slide 10 — Comparaison (1 minute 30)
+
+"Ce tableau récapitule les trois modèles sur les critères qui comptent pour nous. On voit que CTGAN est le plus expressif pour les dépendances complexes, TVAE est le plus stable, et le modèle bayésien est le plus contrôlable et le plus transparent. Chacun a un rôle distinct dans notre benchmark."
+
+
+Slide 11 — Confidentialité (3 minutes)
+
+"La confidentialité, ce n'est pas une contrainte qu'on ajoute à la fin. Dans un contexte bancaire, c'est un pilier fondamental dès la conception.
+Générer des données synthétiques ne garantit pas automatiquement la protection des individus. Un modèle peut mémoriser des cas rares, ou un individu peut être retrouvé par recoupement de variables.
+Je travaille avec trois approches complémentaires.
+D'abord le k-anonymat : l'idée est que chaque individu soit indiscernable d'au moins k−1 autres personnes sur les quasi-identifiants comme l'âge, le sexe ou les revenus. Trouver le bon k est délicat : trop petit, le risque reste élevé ; trop grand, on perd de l'utilité.
+La ℓ-diversity va plus loin : au sein de chaque groupe anonymisé, les valeurs sensibles — ici le statut de défaut — doivent être suffisamment diversifiées pour éviter les attaques par inférence.
+Enfin, la Differential Privacy est la garantie la plus formelle : elle consiste à injecter du bruit contrôlé dans le processus de génération, de sorte que la présence ou l'absence d'un individu ne change pas significativement la sortie du modèle. Le paramètre ε contrôle ce bruit — et donc le compromis entre confidentialité et utilité."
+
+
+Slide 12 — Évaluation qualité (2 minutes)
+
+"Comment évaluer rigoureusement des données synthétiques ? On ne peut pas juste regarder si elles 'semblent' ressembler aux vraies.
+J'évalue trois dimensions distinctes. La fidélité statistique : est-ce que les distributions et les corrélations sont bien reproduites ? L'utilité prédictive : est-ce qu'un modèle entraîné sur synthétique est efficace sur du réel ? C'est ce qu'on appelle le TSTR. Et la confidentialité : à quel point les données synthétiques sont-elles proches des individus réels, via des métriques comme la distance aux plus proches voisins.
+L'objectif final est de trouver le meilleur équilibre entre ces trois dimensions. C'est rarement le même modèle qui gagne sur les trois."
+
+
+Slide 13 — Objectifs 2 & 3 (1 minute)
+
+"Pour être complet, voici un aperçu de la suite du projet. L'objectif 2 concerne le scoring de crédit : entraîner des modèles de prédiction du défaut sur données réelles et synthétiques, et comparer rigoureusement les performances via AUC, Gini et KS. L'objectif 3 porte sur l'interprétabilité : expliquer scientifiquement les écarts, en utilisant des méthodes comme SHAP et la méthodologie XPER. Ces deux objectifs seront développés en collaboration avec l'autre stagiaire."
+
+
+Slide 14 — Chronologie (1 minute 30)
+
+"Sur la chronologie : les trois premières phases sont terminées — analyse des données, génération CTGAN et TVAE, et le modèle bayésien. Je suis actuellement sur la partie anonymisation, et les phases d'évaluation globale et de scoring sont prévues dans les semaines suivantes.
+L'avancement est conforme au planning initial, avec les ajustements normaux liés à la découverte de la base."
+
+
+Slide 15 — Conclusion (1 minute)
+
+"En résumé, ce projet construit un pipeline complet et rigoureux, de la donnée réelle à l'évaluation du modèle synthétique. Trois modèles génératifs sont comparés avec une grille de critères métier. La confidentialité est intégrée dès la conception. Et l'ensemble est pensé pour être un jour transposé sur de vraies données bancaires internes.
+Merci de votre attention. Je suis disponible pour vos questions."
