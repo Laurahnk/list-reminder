@@ -1,0 +1,30 @@
+def apply_laplace_dp_normalized(df_synth, numeric_cols, epsilon,
+                                 ref_df, random_state=42):
+    rng   = np.random.default_rng(random_state)
+    df_dp = df_synth.copy()
+
+    for col in numeric_cols:
+        if col == CIBLE:
+            continue
+
+        # CORRECTION : bornes robustes P1-P99 au lieu de min-max bruts
+        # Les outliers extrêmes (ex. revenus de 117M€) ne font plus exploser rng_
+        vmin = float(np.percentile(ref_df[col], 1))
+        vmax = float(np.percentile(ref_df[col], 99))
+        rng_ = vmax - vmin
+        if rng_ == 0:
+            continue
+
+        # Normalisation dans [0, 1] — les valeurs hors [P1,P99] seront clippées
+        x_norm  = (df_dp[col].values - vmin) / rng_
+        x_norm  = np.clip(x_norm, 0.0, 1.0)   # clip avant le bruit aussi
+
+        # Bruit Laplace dans l'espace normalisé (sensibilité = 1)
+        noise   = rng.laplace(loc=0, scale=1.0 / epsilon, size=len(df_dp))
+        x_noisy = np.clip(x_norm + noise, 0.0, 1.0)
+
+        # Retour à l'échelle originale
+        df_dp[col] = x_noisy * rng_ + vmin
+
+    df_dp[CIBLE] = df_synth[CIBLE].values
+    return df_dp
