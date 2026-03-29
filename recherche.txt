@@ -1,166 +1,234 @@
-Bonne question — et la réponse dépend de ce que tu veux **prouver** dans ton projet. Laisse-moi clarifier les rôles de chacune.
+Narratif révisé
+________________________________________
+L'accroche
+Dans notre métier, on sort des AUC, des Gini. On dit que le modèle est bon ou mauvais. Mais est-ce qu'on sait vraiment ce que ces chiffres disent ? Quelle variable tire l'AUC vers le haut ? Quelle partie de l'information a été perdue en chemin ?
+C'est la vraie question de ce stage. Pas juste "est-ce que le modèle performe" — mais pourquoi il performe à ce niveau, et comment on le mesure rigoureusement.
+Et pour y répondre, il faut un contexte particulier : des données synthétiques et anonymisées. Parce que c'est précisément quand on substitue les données réelles par du synthétique qu'on voit ce que les métriques capturent vraiment — et ce qu'elles ratent.
+________________________________________
+La problématique
+"Comment interpréter et qualifier les métriques de performance d'un modèle de scoring pour comprendre ce qu'elles révèlent sur la qualité d'une base synthétique anonymisée ?"
+________________________________________
+Les 3 objectifs
+Pour arriver à cette question centrale, il faut d’abord construire un cadre de travail crédible. C’est pour cela que le stage s’organise en trois objectifs qui s’enchaînent de manière logique.
+Ce n'est pas trois sujets séparés. C'est une chaîne logique où chaque étape rend la suivante possible.
+Objectif 1 — Construire une base synthétique et anonymisée. Pour étudier les métriques, il faut un terrain d'expérimentation contrôlé. On génère plusieurs bases synthétiques à partir de données de crédit réelles, et on les anonymise. C'est le matériau sans lequel rien n'est possible.
+Objectif 2 — Calculer les performances des modèles de scoring. Une fois les bases construites, on entraîne des modèles de scoring et on calcule les métriques — AUC, Gini, courbes ROC. On compare ce qu'on obtient sur synthétique versus réel. C'est là qu'apparaissent les écarts intéressants à expliquer.
+Objectif 3 — Interpréter et expliquer ces métriques. C'est l'objectif central. Pas juste lire un chiffre, mais comprendre ce qu'il dit. Pourquoi l'AUC est à 0.725 et pas 0.80 ? Quelle variable contribue le plus à la performance ? Qu'est-ce qu'on a perdu en passant au synthétique ? C'est ici qu'intervient la méthode XPER — elle décompose la performance d'un modèle variable par variable, exactement comme SHAP décompose une prédiction, mais appliqué à la métrique elle-même.
+________________________________________
+Autrement dit, la synthèse de données et la confidentialité ne sont pas la finalité du stage. Ce sont des étapes nécessaires pour répondre à la vraie question : qu’est-ce qu’un AUC ou un Gini raconte réellement sur la donnée utilisée par le modèle ?
+Je vais donc présenter cette démarche en suivant cette progression : d’abord la construction de la base synthétique, ensuite la question de la confidentialité, puis l’évaluation de notre base synthetique et reelle . 
+Les 3 modèles — version finale
+Vous connaissez tous les deepfakes. Une vidéo tellement bien générée qu'on ne distingue plus le vrai du faux. Où l'on fait dire n'importe quoi à une personnalité célèbre. Le principe, c'est que le modele a appris les micro-expressions du visage (les corrélations) pour créer un faux visage indiscernable du vrai. L'idée ici est exactement la même mais appliquée à des tableaux de données.
+On veut générer des clients artificiels qui ressemblent à de vrais clients. Ni trop proches du réel pour protéger la confidentialité, ni trop éloignés pour rester utiles.
+C'est ce qu'on appelle la synthèse de données tabulaires. Et il existe plusieurs façons de le faire. Trois sont en phase de tests.
+
+La première approche testée s'appelle CTGAN
+-	 directement inspiré des deepfakes, adapté aux tableaux de données. 
+Ce qui le rend particulièrement adapté à une base de crédit, c'est sa capacité à reproduire non seulement chaque variable individuellement, mais aussi la cohérence globale entre elles. Par exemple, un client avec un revenu élevé aura naturellement un montant de crédit plus important ce type de relation, le CTGAN arrive à la préserver.
+Là où ça se complique, c'est sur la variable la plus importante : le taux de défaut. Dans la réalité, 8% des clients font défaut. Sur les données générées, ce taux monte à 10.37%. Le modèle a tendance à sur-représenter les cas rares quand on ne le contraint pas suffisamment et ça demande un réglage fin pour le corriger. Si on part d'une réalité déformée sur cette variable, tout ce qu'on construit dessus est biaisé.
+Face à ce constat, une deuxième approche semblait prometteuse : le TVAE. Sa logique est différente au lieu d'imiter les données directement, il en apprend une version condensée, puis génère à partir de là. L'entraînement est plus stable, plus rapide. Sur le papier, c'est une alternative sérieuse.
+Mais les résultats montrent l'effet inverse : le taux de défaut s'effondre à 1.5%. Ce modèle est très sensible au déséquilibre initial des données les défauts sont si rares qu'il finit par les lisser, par les oublier. Or c'est précisément cette population qu'on cherche à détecter en scoring.
+Deux modèles, deux inconvenients opposés. L'un sur-génère les défauts, l'autre les efface. Ce que ça révèle, c'est une difficulté commune : reproduire fidèlement une classe rare dans un contexte déséquilibré. Et ça nous amène à changer d'approche.
+Le modèle bayésien fonctionne autrement. On ne laisse pas la machine tout apprendre seule on encode directement la logique métier dans un graphe de dépendances : l'âge influence l'ancienneté, l'ancienneté influence le revenu, le revenu influence le montant emprunté. Résultat : un taux de défaut synthétique de 8.09%, quasiment identique à la réalité, et des performances de scoring très proches de la baseline réelle. Autre atout dans notre contexte ce modèle est totalement transparent et auditable. On voit exactement pourquoi telle variable influence telle autre.
+Mais ce n'est pas non plus la solution idéale. Deux limites importantes. La première : construire ce graphe à la main est long, et sur une base avec 122 variables, ça devient très difficile à maintenir sans automatisation. La seconde, plus technique : ce modèle suppose des relations relativement simples entre variables[LH1.1]. Or les données financières sont rarement simples les revenus, les montants de crédit ont des distributions très asymétriques, avec des valeurs extrêmes, des profils atypiques. Ces nuances-là, le modèle bayésien les capture moins bien que le CTGAN.
+Ce qu'on retient : il n'y a pas de modèle parfait. Chacun représente un compromis différent. Le CTGAN est flexible et fidèle sur les distributions complexes, mais demande un réglage précis sur la cible. Le TVAE est stable mais oublie les classes rares. Le modèle bayésien est fidèle sur le taux de défaut et totalement lisible, mais difficile à scaler et moins expressif sur les distributions asymétriques. Dans un contexte bancaire, le choix dépend des contraintes — et c'est précisément ce type d'arbitrage que cette méthodologie permet de documenter.
+
+Ce qu'on retient de ce comparatif : il n'y a pas de modèle parfait. CTGAN et TVAE sont plus flexibles mais sensibles aux classes rares. Le modèle bayésien est plus maîtrisable mais moins scalable. Notre choix dépendra des contraintes ; nombre de variables, déséquilibre de la cible, exigences de transparence. Et c'est précisément ce type d'arbitrage que cette méthodologie permet de documenter.
+PARTIE 2 : La confidentialité — version narrative
+Avoir une base synthétique qui ressemble aux données réelles, c'est bien. Mais ça ne suffit pas surtout dans un contexte bancaire.
+Une donnée de crédit, même artificielle, reste une donnée sensible. Elle contient des informations sur le comportement financier, la situation familiale, le niveau de revenu d'un individu. Et dans le secteur bancaire, la protection de ces informations n'est pas une option c'est une obligation légale et éthique.
+C'est exactement ce que la réglementation cherche à protéger. RGPD, IA Act, secret bancaire  toute donnée de crédit est une donnée personnelle sensible, même quand elle est générée artificiellement.
+Anonymiser, c'est s'assurer que la réidentification d’une personne ne peut pas arriver. Et comme pour la génération, il existe plusieurs façons de le faire — avec des logiques très différentes.
+
+-	La première approche s'appelle le k-anonymat. L'idée est simple : chaque individu dans la base doit être indiscernable d'au moins k autres personnes sur ses caractéristiques identifiantes l'âge, la situation familiale, le nombre d'enfants. Si un profil est unique dans la base, il est exposé. Si ce même profil est partagé par au moins cinq personnes, le risque diminue fortement. C'est une protection structurelle on agit directement sur la forme des données.
+Mais cette protection a une limite. Elle garantit qu'on ne peut pas identifier un individu elle ne garantit pas qu'on ne peut pas inférer une information sensible sur lui. Si dans un groupe de cinq personnes qui se ressemblent, toutes font défaut, alors même sans identifier qui est qui, on sait que tout ce groupe est à risque. C'est ce qu'on appelle une attaque par homogénéité — et c'est là qu'intervient la ℓ-diversité. Elle exige qu'au sein de chaque groupe, la variable sensible — ici le défaut — soit suffisamment variée. On ne peut plus inférer d'information sur un individu simplement en connaissant son groupe.
+o	Exemple : Si dans ma base, j'ai un seul homme, de 42 ans, cadre, habitant à Paris 15e. S'il est en défaut de paiement, toute personne connaissant cet homme dans la vraie vie saura qu'il est interdit bancaire. Le k-anonymat force à ce qu'il y ait au moins $K$ personnes (ex: 5) avec ce même profil.
+o	L-diversity : Si ces 5 personnes sont toutes en défaut de paiement, on a le même problème. La l-diversity s'assure que dans ce groupe de 5, il y ait une mixité de bons et de mauvais payeurs.
+= cacher quelq’un dans une foule 
+
+-	La seconde approche : la Differential Privacy. Au lieu de modifier la structure des données, on injecte du bruit de petites perturbations sur les valeurs de façon à ce que la présence ou l'absence d'un individu dans la base ne change pas significativement ce qu'on peut en apprendre. C'est une garantie mathématique. Un paramètre, appelé ε contrôle le niveau de protection : plus il est faible, plus les données sont protégées, mais plus elles s'éloignent de la réalité.
+o	Exemple : Imaginez qu'on demande à 100 employés s'ils ont déjà fraudé. Pour qu'ils répondent honnêtement, on leur dit de lancer une pièce en cachette : si c'est pile, ils disent la vérité ; si c'est face, ils mentent au hasard. Le résultat final contient beaucoup de "bruit" au niveau individuel (on ne peut accuser personne), mais statistiquement, sur les 100 personnes, l'entreprise peut calculer la vraie proportion de fraudeurs. La Differential Privacy fait ça avec des mathématiques avancées sur nos variables bancaires.
+= ajout de bruit stat 
+Et c'est là que se révèle la vraie tension de cette partie du projet. Plus on protège les individus, plus on dégrade l'utilité des données pour le scoring. Ce n'est pas un problème technique à résoudre c'est un arbitrage fondamental à comprendre, à mesurer et à documenter. Trouver le bon équilibre entre protection et utilité, c'est précisément ce que ces expérimentations permettent d'explorer.
+
+________________________________________
+Partie 3 : L'évaluation (Faire le pont vers l'objectif 3)
+Une fois la base synthétique générée et anonymisée, une question se pose naturellement : est-ce qu'elle ressemble encore à la réalité ?
+C'est une évaluation qui doit se faire en deux temps. D'abord sur la base synthétique brute avant anonymisation pour mesurer ce que la génération a préservé ou perdu. Puis une seconde fois après anonymisation, pour mesurer ce que la protection des données a dégradé. C'est ce double regard qui permet de comprendre où se situent vraiment les pertes.
+Pour ça, on regarde plusieurs niveaux. Le premier et le plus immédiat : le taux de défaut. C'est le signal le plus direct si ce chiffre diverge entre réel et synthétique, tout le reste est fragilisé.
+Ensuite, les corrélations entre variables. Une base peut avoir les bonnes distributions variable par variable, mais perdre la cohérence entre elles. Est-ce que la relation entre revenu et montant du crédit, entre âge et ancienneté, est bien reproduite ? C'est ce niveau de ressemblance globale qu'on cherche à vérifier.
+Et enfin, pour aller au bout de l'évaluation, les protocoles TSTR, TRTR et TRTS qui permettent de tester non plus si les données se ressemblent statistiquement, mais si elles sont équivalentes du point de vue du signal prédictif. C'est le test ultime : un modèle entraîné sur synthétique anonymisé se comporte-t-il comme un modèle entraîné sur du réel ?
+________________________________________
+Partie 4 : Bilan actuel — où on en est et ce qui vient
+Trois modèles ont été testés. Les résultats sont là et ils sont instructifs, précisément parce qu'ils ne sont pas parfaits. C'est justement ce qui permet de progresser.
+Le CTGAN et le TVAE donnent des résultats insatisfaisants sur le taux de défaut. Ce n'est pas une raison de les abandonner c'est une raison de les ajuster. Pour le CTGAN, le modèle dispose d'options qui permettent de lui indiquer explicitement quelle proportion de défauts on attend. Mieux le guider sur ce point devrait corriger l'écart. Pour le TVAE, la piste est différente : lui montrer davantage de défauts pendant l'entraînement, pour qu'il cesse de les oublier. Le modèle bayésien, lui, donne les meilleurs résultats à ce stade mais sa construction manuelle reste un frein. L'automatiser est la prochaine étape pour le rendre vraiment exploitable.
+Au-delà de ces ajustements, les questionnements évoluent. On ne cherche plus seulement à savoir si les modèles fonctionnent on cherche à mieux comprendre ce que ça veut dire qu'une base synthétique ressemble à la réalité. Est-ce que des distributions proches suffisent ? Est-ce que des corrélations bien reproduites garantissent une base utilisable ? Ce sont ces questions qui orientent la suite du travail trouver les bonnes métriques, se positionner sur ce que "ressembler" signifie vraiment dans ce contexte.
+Et c'est précisément ce chemin qui mène à l'objectif final : être capable d'expliquer, variable par variable, ce qu'un modèle de scoring a vraiment capturé et ce qu'il a perdu.
+
+
+
+
+
+
+
+
+
+
+
+
+Narratif complet rédigé
+Bonjour à toutes et à tous,
+Dans notre métier, on parle souvent de performance à travers quelques chiffres : une AUC, un Gini, une courbe ROC. On dit qu’un modèle est bon, moins bon, ou insuffisant. Mais une fois que ce chiffre est affiché, une question reste souvent ouverte : qu’est-ce qu’il dit réellement ?
+Pourquoi l’AUC monte-t-elle dans un cas et baisse-t-elle dans un autre ? Qu’est-ce qui soutient la performance du modèle ? Qu’est-ce qui a été perdu en chemin ? Et surtout, est-ce qu’un bon chiffre signifie forcément que la donnée utilisée est bonne ?
+C’est précisément la question de ce stage.
+L’objectif n’est pas seulement de mesurer la performance d’un modèle de scoring, mais de comprendre et qualifier cette performance. Autrement dit, il ne s’agit pas uniquement de dire qu’un modèle obtient tel ou tel Gini, mais d’expliquer pourquoi il l’obtient, et ce que cette performance révèle sur la qualité de la donnée sur laquelle il repose.
+Et pour répondre à cette question, il faut un contexte d’étude particulier : celui des données synthétiques et anonymisées.
+Parce que c’est précisément lorsque l’on remplace la donnée réelle par une donnée transformée — générée, protégée, parfois simplifiée — que l’on voit plus clairement ce que les métriques continuent à capturer, et ce qu’elles perdent.
+La problématique du stage peut donc se formuler ainsi :
+Comment interpréter et qualifier les métriques de performance d’un modèle de scoring pour comprendre ce qu’elles révèlent sur la qualité d’une base synthétique anonymisée ?
+Pour répondre à cette problématique, le travail s’organise en trois objectifs, qui ne sont pas trois sujets séparés, mais trois étapes d’une même chaîne logique.
+Le premier objectif consiste à construire une base synthétique de crédit et à étudier sa protection du point de vue de la confidentialité.
+Le deuxième objectif consiste à entraîner un modèle de scoring de référence sur ces bases et à calculer ses performances.
+Et le troisième, qui est le cœur du stage, consiste à interpréter ces métriques de performance pour comprendre ce qu’elles disent réellement de la qualité de la base synthétique anonymisée.
+Autrement dit, la synthèse de données et la confidentialité ne sont pas la finalité du stage. Ce sont des étapes nécessaires pour répondre à la vraie question : qu’est-ce qu’un AUC ou un Gini raconte réellement sur la donnée utilisée par le modèle ?
+Je vais donc présenter cette démarche en suivant cette progression : d’abord la génération de la base synthétique, ensuite la question de la confidentialité, puis l’évaluation de la base réelle et de la base synthétique, et enfin l’interprétation des performances obtenues.
+________________________________________
+1. Construire une base synthétique crédible
+La première étape du travail consiste à générer une base synthétique à partir d’une base réelle de crédit.
+L’idée générale est simple. Dans un contexte bancaire, les données réelles sont sensibles, encadrées et difficiles à manipuler librement. Il est donc utile de disposer d’une base artificielle capable de reproduire les grandes propriétés statistiques de la base d’origine, sans se contenter d’en être une copie déguisée.
+Mais une bonne base synthétique n’est pas seulement une base qui “ressemble” visuellement à la base réelle. Elle doit conserver des distributions plausibles, des relations cohérentes entre variables, une structure globale crédible, et surtout un signal encore exploitable pour le scoring.
+Pour introduire cette idée de manière simple, on peut partir d’une analogie connue : celle des deepfakes.
+Dans un deepfake, le principe général est d’apprendre à reproduire quelque chose de réaliste à partir d’exemples observés. Ici, il ne s’agit évidemment pas d’images ou de vidéos, mais de tableaux de données. L’objectif n’est donc pas de générer un faux visage, mais de générer de faux clients statistiquement plausibles : des profils artificiels qui ressemblent aux vrais clients dans leur structure, sans être de simples reproductions individuelles.
+L’enjeu est bien là : générer des clients artificiels ni trop proches du réel, pour protéger la confidentialité, ni trop éloignés, pour rester utiles.
+Plusieurs approches ont été étudiées pour cela. Trois modèles sont aujourd’hui au centre des tests : le CTGAN, le TVAE et une approche bayésienne.
+La première approche testée est le CTGAN.
+C’est un modèle génératif conçu pour les données tabulaires mixtes, c’est-à-dire contenant à la fois des variables numériques et catégorielles. Ce qui le rend intéressant dans une base de crédit, c’est sa capacité à reproduire non seulement les variables prises séparément, mais aussi une partie de la cohérence entre elles. Par exemple, certaines combinaisons de revenu, montant emprunté, ancienneté ou statut contractuel ne sont pas indépendantes les unes des autres ; ce sont précisément ces dépendances qu’une bonne synthèse doit préserver.
+Dans les essais menés à ce stade, le CTGAN apparaît comme une piste sérieuse pour restituer une structure riche et des distributions complexes. En revanche, il présente aussi une première difficulté importante sur la variable la plus sensible pour le scoring : la cible de défaut.
+Dans la base réelle, le taux de défaut est de 8 %. Dans la base synthétique générée par CTGAN, ce taux monte à 10,37 %.
+Cela ne signifie pas que le modèle est mauvais en soi, mais que, dans ce cadre précis, il sur-représente la classe rare si le réglage sur la cible n’est pas suffisamment maîtrisé. Et ce point est critique, car si l’on part d’une représentation déformée du défaut, tout ce qui est construit ensuite sur cette base peut être biaisé.
+Face à cette première limite, une deuxième approche a été étudiée : le TVAE.
+Sa logique est différente. Là où le CTGAN cherche à générer des données via un mécanisme adversarial, le TVAE apprend une représentation latente de la base, c’est-à-dire une version condensée de sa structure, puis génère de nouvelles observations à partir de cette représentation.
+Sur le papier, cette approche est intéressante, car elle propose une alternative plus stable et parfois plus simple à entraîner. Mais dans une base de crédit, où la population en défaut est rare et où certaines structures sont très déséquilibrées, cette compression peut aussi lisser une partie du signal.
+C’est d’ailleurs ce qui ressort des premiers essais.
+Avec le TVAE, le taux de défaut synthétique tombe à 1,5 %, donc très en dessous de la réalité observée.
+Autrement dit, dans les essais menés, le modèle tend à écraser la classe rare au lieu de la préserver. Or c’est précisément cette population rare qui intéresse le plus le scoring, puisque tout l’enjeu du modèle est justement de détecter les profils les plus risqués.
+À ce stade, les deux premiers modèles révèlent donc deux difficultés opposées :
+le CTGAN tend à sur-générer les défauts ;
+le TVAE tend à les lisser ou à les sous-représenter.
+Ce que cela montre, ce n’est pas seulement une faiblesse propre à chaque modèle ; c’est une difficulté plus générale : reproduire fidèlement une classe rare dans un contexte déséquilibré.
+C’est ce constat qui a amené à tester une troisième approche : le modèle bayésien.
+Le modèle bayésien fonctionne autrement. Ici, on ne laisse pas uniquement la machine apprendre une structure implicite ; on cherche aussi à représenter explicitement une logique de dépendances entre variables à l’aide d’un graphe orienté acyclique, ou DAG.
+L’idée est de formaliser une structure du type : l’âge influence l’ancienneté, l’ancienneté influence le revenu, le revenu influence le montant emprunté, etc.
+Cette approche a un intérêt particulier dans ce stage, car elle est plus lisible et plus explicite que les approches purement neuronales. Dans un travail où la question finale est celle de l’interprétation, cet aspect est très important.
+À ce stade des tests, cette approche donne un taux de défaut synthétique de 8,09 %, donc très proche du taux réel de 8 %.
+Elle conduit également à des performances de scoring plus proches de la baseline réelle que celles obtenues avec les deux autres approches, dans les essais réalisés jusqu’ici.
+C’est donc, à ce stade, la piste la plus convaincante sur le plan de la restitution de la cible et de la stabilité du signal de scoring.
+Mais là encore, ce n’est pas une solution parfaite.
+La première limite est pratique : construire le DAG à la main est long, et sur une base contenant un grand nombre de variables, cela devient très difficile à maintenir sans automatisation.
+La seconde limite est statistique : ce type de modèle est généralement plus à l’aise avec des relations structurées et relativement simples qu’avec des dépendances très complexes, des distributions très asymétriques, ou des queues épaisses comme on peut en rencontrer dans les données financières.
+Autrement dit, il gagne en lisibilité ce qu’il peut parfois perdre en flexibilité.
+Ce qu’il faut retenir de cette comparaison, c’est donc qu’il n’existe pas de modèle parfait.
+Le CTGAN est plus flexible et plus expressif sur les structures complexes, mais il demande un réglage fin sur la cible.
+Le TVAE est une alternative intéressante sur le principe, mais il paraît moins satisfaisant à ce stade sur la restitution de la classe rare.
+Le modèle bayésien est plus lisible et plus maîtrisable, mais plus lourd à construire et potentiellement moins souple sur des distributions complexes.
+Le choix d’un modèle de synthèse dépend donc des contraintes du contexte : le nombre de variables, le niveau de déséquilibre de la cible, l’exigence de transparence, le temps de calcul, ou encore la capacité à automatiser. Et c’est précisément ce type d’arbitrage que cette méthodologie cherche à documenter.
+________________________________________
+2. La confidentialité : protéger sans détruire l’utilité
+Avoir une base synthétique qui ressemble aux données réelles, c’est une première étape. Mais dans un contexte bancaire, cela ne suffit pas.
+Une base de crédit contient des informations qui, dès lors qu’elles permettent d’identifier ou de rendre identifiable une personne, relèvent du champ des données personnelles au sens du RGPD. En revanche, il faut être précis : ces données de crédit ne sont pas automatiquement des “catégories particulières de données” au sens de l’article 9 du RGPD, et des données correctement anonymisées ne relèvent plus du RGPD, contrairement aux données pseudonymisées, qui restent des données personnelles. L’objectif n’est donc pas d’utiliser le mot “sensible” dans un sens juridique trop large, mais de rappeler qu’en pratique bancaire, ce sont des données à très forte sensibilité métier, gouvernance et conformité. (EDPB)
+Le sujet s’inscrit aussi dans un cadre plus large de gouvernance de l’IA. L’AI Act classe comme systèmes d’IA à haut risque les systèmes utilisés pour évaluer la solvabilité ou établir le score de crédit de personnes physiques, parce qu’ils conditionnent l’accès à des ressources financières ou à des services essentiels. Cela renforce l’exigence de robustesse, de traçabilité et de compréhension des systèmes utilisés dans ce domaine. (Eur-Lex)
+Dans ce contexte, anonymiser ne signifie pas promettre un risque nul ou affirmer qu’aucune réidentification ne sera jamais possible. Une formulation plus juste consiste à dire qu’il s’agit de réduire le risque de réidentification jusqu’à rendre l’identification non raisonnablement possible, compte tenu des moyens raisonnablement susceptibles d’être utilisés. C’est cette logique de réduction du risque qui guide la suite du travail. (EDPB)
+Plusieurs approches ont été étudiées.
+La première est le k-anonymat.
+L’idée est simple : chaque individu dans la base doit être indiscernable d’au moins k-1 autres individus sur un ensemble de quasi-identifiants, par exemple l’âge, la situation familiale, le nombre d’enfants ou la localisation.
+Autrement dit, si un profil est unique, il est exposé ; s’il est partagé par plusieurs personnes, le risque d’isolement diminue.
+C’est une protection structurelle : on agit directement sur la forme des données, généralement par regroupement, généralisation ou suppression partielle d’informations.
+Mais cette protection a une limite. Elle rend l’identification plus difficile ; elle ne garantit pas que l’on ne puisse rien inférer sur une personne.
+Si un groupe de cinq personnes partage le même profil et que les cinq sont en défaut, alors même sans savoir qui est qui, on peut déduire qu’appartenir à ce groupe revient à être dans la catégorie “défaut”. C’est ce que l’on appelle une attaque par homogénéité.
+C’est précisément pour répondre à ce problème qu’intervient la l-diversity.
+Cette approche complète le k-anonymat en imposant qu’au sein d’un même groupe, la variable sensible soit suffisamment diversifiée.
+Dans notre cas, cela signifie qu’un groupe de profils proches ne doit pas être composé uniquement de personnes en défaut ou uniquement de personnes sans défaut.
+L’idée est donc simple : il ne suffit pas de cacher quelqu’un dans une foule ; il faut aussi éviter que toute la foule raconte la même chose.
+La seconde grande logique étudiée est la Differential Privacy.
+Ici, on ne cherche pas d’abord à modifier la structure visible de la base, mais à limiter ce qu’on peut apprendre sur un individu par sa présence ou son absence dans les données, en ajoutant un bruit contrôlé.
+L’idée générale est qu’une observation individuelle ne doit pas changer de manière trop forte ce que l’on peut conclure.
+C’est une garantie mathématique, pilotée par un paramètre souvent noté ε : plus ε est petit, plus la protection est forte ; mais plus la donnée ou le résultat publié s’éloigne du signal initial.
+Ce point révèle la vraie tension de cette partie du projet.
+Plus on protège les individus, plus on risque de dégrader l’utilité des données pour le scoring.
+Ce n’est pas un simple détail technique ; c’est un arbitrage fondamental à comprendre, à mesurer et à documenter.
+Trouver le bon équilibre entre protection et utilité, c’est précisément l’un des enjeux de cette méthodologie.
+________________________________________
+3. Évaluer la qualité de la base synthétique avant et après anonymisation
+Une fois la base synthétique générée, puis protégée, une question se pose naturellement : ressemble-t-elle encore suffisamment à la réalité pour rester utile ?
+Cette évaluation doit, selon moi, être faite en deux temps.
+D’abord sur la base synthétique avant anonymisation, pour mesurer ce que la génération a préservé ou perdu.
+Puis sur la base après anonymisation, pour mesurer ce que la protection des données a dégradé en plus.
+C’est ce double regard qui permet de localiser les pertes : ce qui vient de la synthèse, ce qui vient de la confidentialité, et ce qui résulte de leur combinaison.
+Le premier niveau d’évaluation est le plus direct : le taux de défaut.
+C’est un indicateur simple, mais central. Si ce taux diverge fortement entre la base réelle et la base synthétique, alors tout le reste devient plus fragile, parce que le signal principal du scoring est déjà déformé.
+Le deuxième niveau d’évaluation concerne les corrélations et les dépendances entre variables.
+Une base peut très bien avoir des distributions plausibles colonne par colonne, tout en perdant la cohérence entre les variables.
+Par exemple, la relation entre revenu et montant du crédit, ou entre âge et ancienneté, peut être mal restituée.
+L’enjeu est donc de vérifier non seulement une ressemblance locale, variable par variable, mais aussi une ressemblance plus globale dans la structure du tableau.
+Le troisième niveau d’évaluation est celui des protocoles de transfert : TRTR, TSTR et TRTS.
+Le schéma TRTR — entraînement sur réel, test sur réel — sert de baseline.
+C’est le point de référence à partir duquel on lit les autres résultats.
+Le schéma TSTR — entraînement sur synthétique, test sur réel — permet d’évaluer si la base synthétique contient encore un signal suffisamment pertinent pour qu’un modèle appris dessus généralise vers le réel.
+Le schéma TRTS — entraînement sur réel, test sur synthétique — permet de vérifier si la base synthétique réagit de manière cohérente face à un modèle appris sur la structure réelle.
+Ces protocoles ne donnent pas exactement la même information, mais ensemble, ils permettent de dépasser la simple ressemblance statistique pour poser une question plus forte :
+la base synthétique est-elle équivalente au réel du point de vue du signal prédictif ?
+________________________________________
+4. Le cœur du stage : interpréter les métriques de performance
+C’est ici que se situe l’objectif principal du stage.
+Dans un projet de scoring classique, on pourrait s’arrêter à la valeur d’une AUC ou d’un Gini. Ici, ce serait insuffisant.
+Le but est précisément de comprendre ce que ces métriques révèlent.
+Un Gini élevé signifie que le modèle sépare bien les individus en défaut de ceux qui ne le sont pas.
+Autrement dit, il classe correctement les profils du plus risqué au moins risqué.
+Mais ce constat, à lui seul, ne dit pas encore pourquoi cette séparation est bonne.
+Un Gini peut être élevé parce que la base contient un signal fort.
+Il peut être élevé parce que les corrélations utiles ont été bien préservées.
+Il peut être élevé parce que la cible a été correctement restituée, ou parce que certaines variables gardent un pouvoir discriminant proche de celui observé dans le réel.
+À l’inverse, un Gini peut baisser pour plusieurs raisons.
+Il peut baisser parce que la synthèse a lissé des relations importantes.
+Il peut baisser parce que l’anonymisation a supprimé ou généralisé une partie de l’information utile.
+Il peut baisser parce que la classe rare est moins bien représentée, ou parce que certaines dépendances locales ont été déformées.
+Le cœur du stage consiste donc à ne pas s’arrêter au chiffre, mais à expliquer le mécanisme statistique qui se cache derrière lui.
+C’est exactement là qu’intervient XPER.
+L’idée de XPER est de faire, au niveau de la métrique de performance, quelque chose qui rappelle ce que SHAP fait au niveau de la prédiction individuelle.
+L’objectif n’est plus seulement de dire qu’une variable contribue à une décision locale, mais de comprendre quelle variable soutient la performance globale du modèle, et dans quelle mesure elle explique un écart d’AUC ou de Gini entre plusieurs contextes d’apprentissage ou d’évaluation.
+Autrement dit, une fois les écarts de performance observés entre base réelle, base synthétique brute et base synthétique anonymisée, XPER permet de poser une question beaucoup plus précise :
+quelles variables expliquent la performance, et lesquelles expliquent sa dégradation éventuelle ?
+C’est ce point qui donne à l’objectif 3 tout son sens.
+Il ne s’agit pas seulement de comparer des métriques ; il s’agit de les attribuer, les décomposer, et les interpréter variable par variable.
+Dans cette logique, l’AUC et le Gini ne sont plus seulement des scores de performance.
+Ils deviennent des indicateurs indirects de la qualité de la donnée.
+Si la performance reste proche de celle observée sur le réel, cela peut indiquer que la structure utile au scoring a été bien préservée.
+Si elle se dégrade, l’enjeu n’est pas seulement de constater cette baisse, mais de comprendre qu’où elle vient : perte de structure, perte de variabilité, mauvaise restitution de la cible, effet de l’anonymisation, ou combinaison de plusieurs facteurs.
+Pour aller plus loin, l’idée n’est pas de s’enfermer dans le seul Gini.
+Cette métrique donne une information globale, mais elle ne raconte pas tout.
+C’est pourquoi elle doit être accompagnée d’analyses complémentaires : comparaison des distributions, analyse des corrélations, étude du taux de défaut, lecture par segments, stabilité train/test, analyse par déciles de score, voire calibration ou KS selon les besoins.
+L’objectif n’est pas d’empiler des indicateurs, mais d’entourer la métrique principale d’outils capables de répondre à la vraie question : pourquoi la performance vaut-elle ce qu’elle vaut ?
+________________________________________
+5. Bilan actuel et suite du travail
+À ce stade, trois modèles ont donc été testés, et les résultats sont instructifs précisément parce qu’ils ne sont pas parfaits.
+Le CTGAN et le TVAE donnent pour l’instant des résultats insatisfaisants sur la restitution du taux de défaut.
+Ce n’est pas une raison de les abandonner, mais une raison de les ajuster.
+Pour le CTGAN, une piste consiste à mieux contraindre ou mieux guider le modèle sur la proportion attendue de défauts, afin de corriger la sur-représentation observée.
+Pour le TVAE, la difficulté est différente : il faut trouver un moyen de mieux exposer le modèle à la classe rare, pour éviter qu’il la lisse excessivement pendant l’apprentissage.
+Le modèle bayésien, lui, donne à ce stade les résultats les plus convaincants sur la restitution du taux de défaut et des performances de scoring plus proches de la baseline réelle.
+Mais sa construction manuelle reste un frein, et l’automatisation du graphe est une étape importante pour le rendre réellement exploitable à plus grande échelle.
+Au-delà de ces ajustements, les questions du stage évoluent progressivement.
+On ne cherche plus seulement à savoir si un modèle “fonctionne” ou non.
+On cherche à comprendre ce que cela veut dire, au fond, qu’une base synthétique “ressemble” à la réalité.
+Est-ce que des distributions proches suffisent ?
+Est-ce que des corrélations bien reproduites garantissent une base utile ?
+Est-ce qu’un bon Gini suffit à conclure que la donnée est de qualité ?
+Ou faut-il au contraire apprendre à qualifier ce Gini, à le décomposer, et à identifier ce qu’il mesure encore — ou ne mesure plus — après transformation de la donnée ?
+C’est précisément ce chemin qui mène à l’objectif final du stage :
+être capable d’expliquer, variable par variable, ce qu’un modèle de scoring a réellement capturé, ce qu’il a perdu, et ce que ses métriques de performance révèlent de la qualité de la base synthétique anonymisée.
+Je vous remercie.
+________________________________________
+Phrase de conclusion courte si tu veux finir plus fort
+Tu peux terminer par :
+Le but du stage n’est donc pas seulement de produire une donnée synthétique ni de calculer un score. Le but est de rendre la performance d’un modèle lisible, explicable et qualifiable, pour comprendre ce qu’elle révèle réellement de la donnée sur laquelle elle repose.
 
----
-
-### Ce sont deux choses différentes, pas deux alternatives
-
-Le k-anonymat et la Differential Privacy **ne protègent pas contre le même risque**. Les choisir n'est pas "l'un ou l'autre" — c'est "lequel est le plus adapté à mon objectif".
-
----
-
-**Le k-anonymat / l-diversité protège contre la réidentification directe**
-
-Il garantit qu'aucun individu n'est unique dans le jeu de données sur ses caractéristiques démographiques. C'est une protection **structurelle et vérifiable** — tu peux montrer un tableau avec k=5 et dire "personne n'est isolable".
-
-C'est la méthode historique, celle que les juristes et les DPO comprennent, celle qu'on cite dans les normes ISO et dans les avis CNIL. Elle est **explicable à un non-technicien**.
-
-La limite : elle ne protège que les quasi-identifiants que tu as choisis (âge, enfants, foyer). Si un attaquant connaît d'autres variables — comme le montant exact du crédit — le k-anonymat ne l'en empêche pas.
-
----
-
-**La Differential Privacy protège contre les attaques statistiques**
-
-Elle garantit qu'un attaquant qui observe les données publiées ne peut pas déduire avec certitude si un individu précis est dans le jeu. C'est une protection **mathématique et probabiliste**.
-
-C'est la méthode moderne, celle qu'Apple, Google et le Census Bureau américain utilisent. Elle est **très robuste** mais moins intuitive — "epsilon" est difficile à expliquer à un DPO.
-
-La limite : elle dégrade la qualité des données (surtout sur les grands montants financiers), et elle ne garantit pas explicitement que personne n'est unique dans le jeu.
-
----
-
-### Dans ton projet spécifiquement
-
-Tu génères des données **synthétiques** — pas des données réelles modifiées. C'est un point crucial que beaucoup oublient.
-
-Les données synthétiques ne contiennent déjà **aucun individu réel**. Le risque n'est donc pas "retrouver Marie dans le jeu" mais plutôt "retrouver les caractéristiques de Marie en observant le jeu synthétique". Ce sont deux risques différents.
-
-Voilà ce que ça implique :
-
-Le **k-anonymat sur données synthétiques** a une valeur plus démonstrative que protectrice. Tu montres que ton générateur ne crée pas de profils rares et uniques — c'est un gage de qualité de la génération. Mais ce n'est pas une protection au sens RGPD strict puisque les données ne sont pas personnelles au départ.
-
-La **DP sur données synthétiques** ajoute une couche de bruit sur un jeu déjà synthétique. C'est doublement prudent — et c'est ce qui te permet de dire "même si quelqu'un essayait une attaque par inférence statistique, la garantie mathématique ε tient". C'est la méthode la plus rigoureuse pour ton usage.
-
----
-
-### Ce que je te recommande concrètement
-
-Pour ton stage, garde **les deux** dans le notebook — mais présente-les avec des rôles clairs et distincts :
-
-Le **k-anonymat** est ta démonstration de **qualité de génération** : "mon modèle bayésien ne génère pas d'individus statistiquement uniques". Tu le mets en avant pour montrer la cohérence métier et la conformité structurelle. C'est facile à expliquer, très visuel (le tableau avec k=5), et ça parle aux juristes.
-
-La **DP ε=5.0** est ta démonstration de **robustesse mathématique** : "même contre une attaque statistique sophistiquée, la garantie formelle tient". Tu la mets en avant pour la comparaison technique et la DCR. C'est ce qui distingue ton projet d'un stage classique.
-
-La **méthode à retenir comme principale** si tu dois n'en choisir qu'une pour ton rapport et tes slides : **la Differential Privacy ε=5.0**, pour trois raisons. C'est le standard académique et industriel actuellement reconnu. Elle offre une garantie mathématique formelle, pas seulement empirique. Et dans ton contexte de données synthétiques bancaires, c'est l'argument le plus défendable devant un DPO ou un auditeur.
-
-Le k-anonymat vient en **complément** pour valider la cohérence structurelle du jeu généré.
----
-
-## Octopize et sa méthode Avatar — tout comprendre
-
-### D'abord : c'est quoi Octopize ?
-
-Octopize est une startup française fondée en 2018, spécialisée dans l'anonymisation de données personnelles. Leur technologie s'appelle la **méthode Avatar**. Plutôt que d'utiliser des modèles génératifs de type GAN ou LLM (qu'ils considèrent comme des "boîtes noires"), ils préfèrent une approche statistique, transparente et explicable, qui leur permet de maîtriser le signal statistique et d'assurer la conformité réglementaire.
-
-La méthode a été auditée et certifiée conforme par la CNIL en 2020, et les données synthétiques générées sortent du champ du RGPD — elles peuvent donc être utilisées, partagées et conservées sans limite de durée.
-
----
-
-### Les 4 grandes solutions proposées
-
-Octopize ne vend pas des "méthodes différentes" au sens algorithmique. Ils proposent **4 usages** de leur technologie Avatar selon le besoin :
-
----
-
-**1. Anonymize (Anonymiser)**
-
-L'objectif est de garantir la conformité RGPD et de permettre le partage ou la réutilisation des données sans risque. Les secteurs concernés sont les RH, la santé, la mobilité, la finance et l'assurance.
-
-C'est l'usage de base : tu as des données personnelles sensibles, tu les passes dans Avatar, tu obtiens un jeu synthétique anonyme que tu peux partager librement.
-
-**✅ Avantages :** conformité RGPD automatique, rapport de confidentialité inclus, certifié CNIL.
-**⚠️ Inconvénients :** processus irréversible (tu ne peux pas retrouver les données originales), ne fonctionne pas bien sur de très petits jeux de données.
-
-**Dans ton projet :** c'est exactement ce que tu fais avec la base Home Credit. Cette solution est directement applicable.
-
----
-
-**2. Desensitize (Désensibiliser)**
-
-Cette approche réduit le risque d'inférence sur des données critiques qui ne sont pas forcément personnelles mais restent sensibles — données industrielles, opérationnelles, de défense ou R&D. L'objectif est de sécuriser des données stratégiques tout en maintenant leur valeur opérationnelle.
-
-C'est différent de l'anonymisation : ici on ne supprime pas totalement le lien avec les données réelles, on réduit le risque. C'est plus adapté aux données d'entreprise (secrets industriels, données financières internes).
-
-**✅ Avantages :** permet de partager des données stratégiques non-personnelles en interne ou avec des partenaires.
-**⚠️ Inconvénients :** ne satisfait pas les critères RGPD d'anonymisation complète — c'est de la pseudonymisation améliorée.
-
-**Dans ton projet :** peu pertinent. Tes données (Home Credit) sont des données personnelles, pas des données industrielles non-personnelles.
-
----
-
-**3. Augment (Augmenter)**
-
-Les données sont rares, coûteuses et parfois déséquilibrées. La méthode permet d'augmenter les jeux de données pour renforcer la puissance statistique des modèles d'IA. L'objectif : combler des lacunes, équilibrer les classes ou simuler des cas rares — sans jamais exposer de données réelles.
-
-C'est l'utilisation d'Avatar non pas pour anonymiser mais pour **générer davantage de données synthétiques** quand on n'en a pas assez, ou pour rééquilibrer des classes déséquilibrées.
-
-**✅ Avantages :** très utile pour les jeux déséquilibrés (comme ton taux de défaut à 8%), génère des données dans les bornes observées (pas de valeurs aberrantes), améliore les performances des modèles ML.
-**⚠️ Inconvénients :** les données augmentées restent dans l'espace statistique du jeu original — elles ne simulent pas de nouveaux scénarios impossibles à observer.
-
-**Dans ton projet :** très pertinent ! Ton taux de défaut est seulement 8% — tu pourrais utiliser Octopize pour rééquilibrer les classes (plus de cas TARGET=1) avant d'entraîner ton modèle de scoring.
-
----
-
-**4. Audit**
-
-Octopize réalise des audits complets pour évaluer la robustesse des techniques d'anonymisation et de pseudonymisation. Ces audits permettent d'identifier les risques d'inférence, de quantifier les niveaux de protection et de renforcer la sécurité des traitements.
-
-C'est un service de conseil : Octopize vient analyser **tes méthodes existantes** (k-anonymat, DP, pseudonymisation) et te dit si elles sont vraiment robustes.
-
-**✅ Avantages :** regard externe expert, rapport de conformité utilisable en audit réglementaire.
-**⚠️ Inconvénients :** c'est un service payant, pas un outil qu'on intègre dans un pipeline.
-
-**Dans ton projet :** intéressant à mentionner comme perspective — dans un contexte bancaire réel, faire auditer sa méthodologie d'anonymisation par un tiers comme Octopize serait une bonne pratique.
-
----
-
-### Les types de données supportés (ce que tu appelles "single data", "time series", etc.)
-
-Ce ne sont pas des "méthodes différentes" mais des **types de données** pour lesquels Avatar a été adapté :
-
-**Single data (données tabulaires classiques)**
-C'est le cas de base — un tableau avec des lignes d'individus et des colonnes de variables. Pour les données tabulaires, la modélisation utilise des méthodes d'analyse factorielle (comme l'AFDM — Analyse Factorielle de Données Mixtes) pour représenter les données dans un espace numérique en tenant compte des relations entre variables. C'est exactement ton cas avec Home Credit.
-
-**Time series data (séries temporelles)**
-Les méthodes définies pour les données tabulaires classiques ne peuvent pas être directement appliquées aux séries temporelles — elles ne préservent pas la logique qui existe entre les points d'une série et le résultat serait incohérent d'un point de vue métier. Octopize a travaillé à adapter son logiciel Avatar pour pouvoir anonymiser les données temporelles tout en maintenant leur logique de séquence, en utilisant une modélisation spécifique aux données fonctionnelles. Pas ton cas avec Home Credit, mais pertinent si tu travailles un jour sur des historiques de transactions bancaires.
-
-**Regulatory data**
-Ce n'est pas un type technique — c'est le positionnement commercial d'Octopize pour les secteurs fortement réglementés (banque, assurance, santé) où la conformité RGPD doit être prouvable. La méthode a été évaluée par la CNIL sur la base de métriques de sécurité et d'utilité respectant les 3 critères définis par le CEPD pour définir l'anonymisation.
-
-**Data augmentation**
-Décrit au point 3 ci-dessus — c'est l'usage d'Avatar pour générer plus de données.
-
----
-
-### Octopize vs ce que tu fais dans ton projet
-
-| Critère | Ton modèle bayésien + DP | Octopize Avatar |
-|---------|--------------------------|-----------------|
-| **Approche** | DAG expert + bruit Laplace | Méthode statistique factorielle propriétaire |
-| **Explicabilité** | Totale (tu codes tout toi-même) | Bonne (approche stat, pas black box) |
-| **Certification** | Non certifiée | Certifiée CNIL 2020 |
-| **Coût** | Gratuit (open source) | Payant (SaaS ou on-premise) |
-| **Rapport automatique** | Non (tu calcules toi-même AUC, DCR…) | Oui (rapport généré automatiquement) |
-| **Differential Privacy** | Oui (mécanisme de Laplace) | Octopize ne l'utilise pas — ils la jugent difficile à configurer, souvent dégradante pour la qualité des données et coûteuse en calcul. Ils préfèrent vérifier la confidentialité après coup. |
-| **Pertinence pour ton projet** | ✅ Idéal pour prototyper et benchmarker | ✅ Serait l'outil industriel pour un déploiement réel |
-
----
-
-### Conclusion : peux-tu utiliser Octopize dans ton projet ?
-
-**Oui, mais pas pour remplacer ce que tu as fait.** Voici comment les deux s'articulent :
-
-Ton travail (modèle bayésien + k-anonymat + DP) est la **démarche scientifique et pédagogique** — tu construis tout depuis le début, tu comprends chaque étape, tu peux l'expliquer à un jury ou un auditeur.
-
-Octopize serait l'**outil industriel** de la prochaine étape — quand on passe de la méthodologie de stage à un déploiement sur une vraie base bancaire interne. Dans ce cas, Octopize offre la certification CNIL, le rapport automatique et la conformité RGPD "by design" qu'un responsable conformité bancaire attend.
-
-En termes de slides, tu peux mentionner Octopize comme **perspective** : "Dans un cadre industriel, la méthodologie développée ici serait implémentée via un outil certifié comme Octopize Avatar, qui offre les mêmes garanties avec un rapport de conformité RGPD automatisé."
