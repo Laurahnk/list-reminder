@@ -1,0 +1,108 @@
+
+---
+
+## 🎯 Sur la problématique et l'objectif général
+
+**Q : Pourquoi utiliser des données synthétiques plutôt que travailler directement sur les vraies données ?**
+
+> Les vraies données bancaires sont soumises à des contraintes réglementaires fortes — RGPD, secret bancaire — qui limitent leur usage, leur partage et leur exposition. Les données synthétiques permettent de tester des approches, de prototyper des modèles et de conduire des recherches sans jamais exposer de vrais clients. C'est particulièrement utile dans un contexte de collaboration entre équipes ou avec des partenaires externes. L'enjeu du stage est justement de vérifier si ces données synthétiques sont suffisamment fidèles pour que les conclusions qu'on en tire restent valables.
+
+---
+
+**Q : En quoi l'interprétabilité des métriques est-elle un vrai problème — on sait déjà ce qu'est une AUC, non ?**
+
+> On sait ce que mesure une AUC en théorie — elle mesure la capacité du modèle à discriminer bons et mauvais payeurs. Mais ce qu'elle ne dit pas, c'est quelle variable porte cette discrimination. Est-ce que c'est EXT_SOURCE_2 qui fait tout le travail ? Est-ce que le revenu contribue réellement ? Et surtout, quand on passe de données réelles à données synthétiques et que l'AUC baisse de 0.712 à 0.701, qu'est-ce qui explique cet écart ? C'est précisément cette couche d'explication que la méthode XPER apporte — elle décompose la métrique variable par variable, comme SHAP le fait pour une prédiction individuelle.
+
+---
+
+## 🤖 Sur les modèles génératifs
+
+**Q : Pourquoi le CTGAN sur-génère les défauts — c'est un bug ou une caractéristique du modèle ?**
+
+> C'est une caractéristique connue des GAN non contraints. Le CTGAN dispose d'un mécanisme de conditionnement qui lui permet en théorie de respecter la distribution de la cible — mais ce mécanisme doit être explicitement paramétré. Sans contrainte précise, le modèle a tendance à amplifier les classes rares parce que c'est là que le signal discriminant est le plus fort. Ce n'est pas un bug, c'est une sensibilité au réglage. La piste d'amélioration est d'ajuster ce conditionnement pour imposer explicitement les proportions attendues.
+
+---
+
+**Q : Et le TVAE — pourquoi fait-il disparaître les défauts alors que le CTGAN les amplifie ?**
+
+> Les deux modèles ont des logiques opposées. Le CTGAN apprend en s'affrontant aux données — il cherche à tromper un discriminateur, ce qui le rend agressif sur les patterns forts. Le TVAE, lui, apprend une représentation condensée et lissée des données — il cherche à capturer la tendance centrale. Dans un dataset où 92% des clients ne font pas défaut, cette tendance centrale, c'est le non-défaut. Le modèle l'apprend très bien et sous-représente fortement la minorité. C'est ce qu'on appelle l'effet de lissage des autoencodeurs variationnels sur les classes déséquilibrées.
+
+---
+
+**Q : Pourquoi avoir choisi un modèle bayésien comme troisième approche — c'est une méthode ancienne, non ?**
+
+> C'est une méthode plus classique, oui — et c'est précisément l'intérêt. Dans un benchmark, on a besoin d'une référence stable et interprétable pour comparer les approches deep learning. Le modèle bayésien joue ce rôle. Il a aussi un atout très concret dans notre contexte : il est totalement auditable. On voit explicitement comment chaque variable influence les autres — ce qui est un avantage majeur dans un environnement bancaire soumis à des exigences de transparence. Les méthodes plus sophistiquées sont des boîtes noires ; le modèle bayésien, non.
+
+---
+
+**Q : Pourquoi ne pas avoir testé d'autres modèles — il existe des approches plus récentes non ?**
+
+> Tout à fait, il existe d'autres approches — notamment les modèles de diffusion ou des variantes plus récentes de GAN. Le choix de ces trois modèles est délibéré : ils représentent trois paradigmes différents — adversarial, probabiliste et statistique — ce qui permet une comparaison méthodologique solide. L'objectif n'est pas d'explorer exhaustivement tous les modèles existants, mais de construire un cadre d'évaluation rigoureux et réplicable. Ce cadre pourra ensuite être appliqué à d'autres modèles.
+
+---
+
+**Q : Le modèle bayésien nécessite de construire le graphe à la main — comment vous comptez l'automatiser ?**
+
+> Il existe des algorithmes d'apprentissage de structure de réseaux bayésiens — comme PC, GES ou des variantes basées sur le score BIC — qui construisent automatiquement le graphe à partir des données en cherchant les dépendances statistiquement significatives. L'idée serait d'utiliser ces algorithmes comme point de départ, puis de valider ou corriger la structure obtenue avec la logique métier. C'est un compromis entre automatisation et expertise humaine.
+
+---
+
+## 🔒 Sur la confidentialité
+
+**Q : Une base synthétique n'est-elle pas déjà anonyme par définition — pourquoi avoir besoin de l'anonymiser en plus ?**
+
+> C'est une idée reçue importante à corriger. Une base synthétique n'est pas anonyme par construction. Si le modèle génératif a mémorisé des cas rares — un profil atypique qui apparaissait une seule fois dans les données réelles — il peut le reproduire presque à l'identique. Par ailleurs, même sans mémorisation directe, la combinaison de plusieurs variables peut suffire à retrouver un individu réel. C'est pourquoi on applique des techniques d'anonymisation complémentaires pour garantir formellement que la réidentification est impossible.
+
+---
+
+**Q : Comment choisit-on la valeur de k dans le k-anonymat ?**
+
+> C'est un arbitrage entre protection et utilité. Un k trop petit — par exemple k=2 — offre peu de protection. Un k trop grand — k=50 — oblige à supprimer ou généraliser tellement de lignes que les données perdent leur valeur. Dans notre cas, k=5 a été retenu comme point de départ — c'est une valeur couramment utilisée dans la littérature pour les données bancaires. Seulement 36 lignes ont été supprimées sur 28 000, soit 0.13% du jeu — ce qui montre que cette contrainte est très peu coûteuse en utilité sur une base synthétique bien construite.
+
+---
+
+**Q : Quelle est la différence concrète entre k-anonymat et Differential Privacy — les deux protègent la vie privée, non ?**
+
+> Ils protègent contre des risques différents. Le k-anonymat est une protection structurelle — on modifie la forme des données pour qu'aucun individu ne soit unique. La Differential Privacy est une protection probabiliste — on injecte du bruit mathématiquement calibré pour qu'on ne puisse pas déduire si un individu spécifique est présent dans la base, même en ayant accès à toutes les statistiques. La DP offre une garantie formelle plus forte, mais elle dégrade davantage l'utilité des données. Les deux approches sont complémentaires.
+
+---
+
+**Q : Est-ce que la Differential Privacy s'applique sur les variables catégorielles aussi ?**
+
+> Dans ce projet, non — la DP est appliquée uniquement sur les variables numériques. C'est là qu'elle est mathématiquement bien définie via le mécanisme de Laplace, qui calibre le bruit en fonction de la sensibilité de la variable. Sur les variables catégorielles, d'autres mécanismes existent — comme le mécanisme exponentiel — mais ils sont plus complexes à mettre en œuvre et l'impact sur l'utilité est plus difficile à contrôler. C'est une piste d'extension future.
+
+---
+
+## 📊 Sur l'évaluation
+
+**Q : Qu'est-ce que le TRTS très élevé signifie concrètement — AUC de 0.90, c'est suspect non ?**
+
+> Exactement, c'est un signal d'alerte. Un TRTS très élevé signifie qu'un modèle entraîné sur données réelles prédit très bien sur données synthétiques. Ça veut dire que le synthétique est trop régulier, trop prévisible — il ne contient pas la complexité et le bruit naturel des vraies données. Le modèle le "lit" trop facilement. C'est pourquoi le TRTS ne doit pas être interprété comme une bonne performance — c'est au contraire un indicateur que la base synthétique manque de réalisme.
+
+---
+
+**Q : Pourquoi comparer le TSTR au TRTR et pas directement aux performances sur données réelles ?**
+
+> Parce que le TRTR est notre référence absolue — c'est la performance qu'on obtiendrait dans les meilleures conditions, sur des données réelles. Si le TSTR s'en approche, ça signifie que les données synthétiques préservent bien le signal prédictif. Si l'écart est faible, les données synthétiques sont utilisables. Si l'écart est fort, quelque chose d'essentiel a été perdu lors de la génération. C'est ce delta qui nous intéresse, pas la valeur absolue de l'AUC.
+
+---
+
+## 🏦 Sur le contexte bancaire et la suite
+
+**Q : Est-ce que cette méthodologie est transposable sur de vraies données internes ?**
+
+> C'est précisément l'objectif final. La base Home Credit sur Kaggle sert de prototype réaliste — elle a les mêmes caractéristiques qu'une vraie base bancaire en termes de volume, de types de variables et de déséquilibre de la cible. La méthodologie construite ici est pensée pour être modulaire et réplicable. Chaque étape — génération, anonymisation, évaluation — peut être appliquée à une base interne en ajustant simplement les paramètres et les contraintes réglementaires propres à l'institution.
+
+---
+
+**Q : Comment vous allez mesurer concrètement l'interprétabilité avec XPER ?**
+
+> XPER fonctionne comme SHAP mais appliqué à la métrique de performance plutôt qu'à la prédiction individuelle. Concrètement, on calcule la contribution de chaque variable à l'AUC ou au Gini global — en mesurant ce qui se passe quand on retire ou permute une variable. On obtient une décomposition du type "EXT_SOURCE_2 contribue à hauteur de X points d'AUC, le revenu contribue Y points". Ça permet de comparer ces contributions entre un modèle entraîné sur réel et un modèle entraîné sur synthétique — et d'identifier précisément quelle variable a perdu son signal lors de la génération.
+
+---
+
+**Q : Vous travaillez seul sur ce projet ou en équipe ?**
+
+> Le projet est mené à deux stagiaires. La partie que je présente aujourd'hui — génération et anonymisation — est celle sur laquelle le travail est le plus avancé. La partie scoring et interprétabilité, qui correspond aux objectifs 2 et 3, sera développée conjointement avec le second stagiaire dans les prochaines semaines.
+
+---
