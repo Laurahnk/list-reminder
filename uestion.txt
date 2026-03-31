@@ -106,3 +106,88 @@
 > Le projet est mené à deux stagiaires. La partie que je présente aujourd'hui — génération et anonymisation — est celle sur laquelle le travail est le plus avancé. La partie scoring et interprétabilité, qui correspond aux objectifs 2 et 3, sera développée conjointement avec le second stagiaire dans les prochaines semaines.
 
 ---
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+**Q : Dans le CTGAN, comment fonctionne concrètement le conditional vector — c'est quoi exactement ?**
+
+> Le conditional vector est le mécanisme qui permet au CTGAN de conditionner la génération sur une valeur spécifique d'une variable catégorielle ou sur la cible. Concrètement, à chaque batch d'entraînement, on tire aléatoirement une modalité — par exemple TARGET=1 — et on force le générateur à produire des observations qui correspondent à cette modalité. Le discriminateur doit alors évaluer si ces observations conditionnées sont réalistes. Ce mécanisme est censé corriger le déséquilibre des classes en forçant le générateur à "voir" suffisamment de défauts. Dans notre cas, il n'a pas été suffisamment contraint, d'où le taux de 10.37%.
+
+---
+
+**Q : Dans le TVAE, qu'est-ce que l'espace latent représente concrètement sur des données tabulaires ?**
+
+> L'espace latent est une représentation compressée des données dans un espace continu de dimension réduite. Chaque point de cet espace correspond à une distribution de probabilité — une gaussienne — plutôt qu'à une valeur fixe. Concrètement sur nos données, un point de l'espace latent encode une combinaison de caractéristiques client — profil de revenu, âge, montant de crédit — de façon condensée. Pour générer une nouvelle observation, on échantillonne un point dans cet espace et le décodeur le retranscrit en valeurs tabulaires. Le problème sur les classes rares, c'est que les défauts occupent une région très petite et peu dense de cet espace — le décodeur les génère donc très rarement.
+
+---
+
+**Q : Comment le modèle bayésien gère-t-il les variables continues — un réseau bayésien classique est discret non ?**
+
+> C'est une bonne remarque. Les réseaux bayésiens classiques sont en effet conçus pour des variables discrètes. Pour gérer les variables continues comme les revenus ou les montants, on utilise des régressions linéaires conditionnelles à chaque nœud — c'est ce qu'on appelle un réseau bayésien gaussien ou un réseau bayésien à nœuds mixtes. Concrètement, pour chaque variable, on modélise sa distribution conditionnellement à ses parents dans le graphe par une régression. C'est ce qui explique la limite mentionnée sur les distributions asymétriques — la régression linéaire capture mal les queues de distribution et les valeurs extrêmes qu'on retrouve sur les revenus bancaires.
+
+---
+
+**Q : Pourquoi avoir utilisé une transformation log sur les montants financiers dans le modèle bayésien ?**
+
+> Les variables financières comme les revenus ou les montants de crédit ont des distributions très asymétriques — la grande majorité des clients ont des revenus modestes, mais quelques profils extrêmes tirent la distribution vers la droite. Sans transformation, ces valeurs extrêmes domineraient la régression et biaisaient la modélisation des dépendances. La transformation log1p ramène ces distributions à quelque chose de plus symétrique, proche d'une gaussienne, ce qui est nécessaire pour que les régressions du réseau bayésien fonctionnent correctement. On revient ensuite à l'échelle originale par exponentielle après génération.
+
+---
+
+**Q : Comment fonctionne le mécanisme de Laplace dans la Differential Privacy — pourquoi Laplace et pas une gaussienne ?**
+
+> Le mécanisme de Laplace est le plus simple et le plus direct pour garantir la ε-DP. Il consiste à ajouter un bruit tiré d'une distribution de Laplace de paramètre sensibilité/ε à chaque valeur numérique. On utilise Laplace plutôt que Gaussienne parce que Laplace garantit la ε-DP pure — une garantie stricte. La Gaussienne garantit une variante légèrement plus faible appelée (ε,δ)-DP, qui tolère une petite probabilité δ de violation. Dans notre cas on a normalisé les variables entre 0 et 1 avant d'appliquer le bruit — ce qui évite que des variables à grande échelle comme les revenus reçoivent un bruit disproportionné.
+
+---
+
+**Q : Comment calculez-vous la sensibilité dans votre implémentation de la DP — c'est la sensibilité globale ou locale ?**
+
+> On utilise une sensibilité normalisée — c'est une approximation de la sensibilité globale basée sur les percentiles P1-P99 plutôt que sur le min-max brut. La raison est pratique : sur des données bancaires, il y a des valeurs extrêmes — des revenus à plusieurs millions d'euros — qui feraient exploser la sensibilité brute et rendraient le bruit totalement inutilisable. En utilisant les percentiles robustes, on calibre le bruit sur la plage réelle où se concentrent 98% des individus, ce qui donne un compromis utilité/protection beaucoup plus raisonnable.
+
+---
+
+**Q : Qu'est-ce que la Distance to Closest Record — DCR — et pourquoi c'est meilleur qu'une attaque par membership inference ?**
+
+> La DCR mesure, pour chaque individu réel, la distance euclidienne à l'individu synthétique le plus proche dans l'espace des features normalisées. Une DCR médiane élevée signifie que les individus synthétiques sont éloignés des individus réels — bonne protection. Une DCR très faible signifie que le synthétique "copie" presque des individus réels — risque de réidentification. On l'a préféré à l'attaque par membership inference classique — qui utilise un classificateur pour distinguer réel de synthétique — parce que cette dernière donne des résultats paradoxaux avec la DP : plus on ajoute de bruit, plus les données sont différentes du réel, et plus le classificateur les sépare facilement, ce qui donne une AUC paradoxalement haute alors que la protection est en réalité meilleure. La DCR est plus directe et plus intuitive.
+
+---
+
+**Q : Dans les protocoles TSTR/TRTR/TRTS, quel modèle de scoring avez-vous utilisé et pourquoi ?**
+
+> On a utilisé une régression logistique dans le modèle bayésien, et un Random Forest dans le CTGAN/TVAE. La régression logistique est le modèle de référence en scoring de crédit — simple, interprétable, et standard dans l'industrie bancaire. C'est un bon choix pour l'évaluation parce qu'on ne veut pas qu'un modèle trop complexe compense les faiblesses du synthétique. Si on utilisait un XGBoost ou un réseau de neurones, il pourrait apprendre des patterns résidus et masquer les vrais écarts de qualité. La régression logistique est plus "honnête" dans ce contexte d'évaluation.
+
+---
+
+**Q : Pourquoi le TSTR donne une AUC légèrement supérieure au TRTR sur le modèle bayésien — c'est possible ça ?**
+
+> Oui, et c'est un phénomène connu qu'on appelle l'effet de régularisation du synthétique. Les données synthétiques ont moins de bruit que les données réelles — elles ne contiennent pas les erreurs de saisie, les valeurs aberrantes, les cas atypiques qu'on trouve dans une vraie base. Un modèle entraîné sur ces données apprend donc une version "nettoyée" des relations entre variables, ce qui peut améliorer légèrement sa capacité de généralisation. C'est un résultat positif, mais il faut l'interpréter avec prudence — une AUC trop supérieure pourrait signifier que le synthétique est trop idéalisé et ne représente pas fidèlement la réalité.
+
+---
+
+**Q : Comment avez-vous géré le déséquilibre de la cible — 8% de défauts — dans vos modèles de scoring ?**
+
+> Dans les modèles de scoring, on a utilisé le paramètre class_weight='balanced' qui pondère automatiquement les classes inversement à leur fréquence — les défauts reçoivent un poids environ 11 fois supérieur aux non-défauts. C'est une approche standard en scoring de crédit. Pour la génération, c'est différent — CTGAN dispose du conditional vector, TVAE devrait bénéficier d'un oversampling préalable, et le modèle bayésien gère ça naturellement via la modélisation probabiliste de la cible comme variable dépendante dans le graphe.
+
+---
+
+**Q : Qu'est-ce que le Gini apporte par rapport à l'AUC — pourquoi les deux ?**
+
+> Le Gini est simplement une transformation linéaire de l'AUC : Gini = 2 × AUC − 1. Il ramène la métrique sur une échelle entre 0 et 1, où 0 signifie qu'un modèle aléatoire et 1 signifie un modèle parfait. L'AUC inclut le hasard dans son échelle — un modèle aléatoire a une AUC de 0.5 — ce qui peut être moins intuitif. Dans le monde bancaire, le Gini est souvent préféré parce qu'il donne une lecture plus directe de la puissance discriminante. Un Gini de 0.42 est clairement meilleur qu'un Gini de 0.20, sans avoir besoin de soustraire 0.5 mentalement. Les deux métriques sont reportées pour faciliter la communication avec différentes audiences.
+
+---
+
+**Q : Comment choisissez-vous les quasi-identifiants — c'est subjectif ou il y a une méthode ?**
+
+> C'est un choix qui combine méthodologie et expertise métier. Méthodologiquement, un quasi-identifiant est une variable qui, combinée à d'autres, peut permettre d'identifier un individu. On cherche des variables stables, observables de l'extérieur et discriminantes. Dans notre cas — âge, nombre d'enfants, composition du foyer. YEARS_EMPLOYED a été exclu malgré sa pertinence apparente parce que c'est une variable continue à très forte granularité — des milliers de valeurs distinctes — ce qui rendait k=1 inévitable même après généralisation en bins. C'est un exemple concret où la théorie doit s'adapter aux contraintes pratiques des données.
+
