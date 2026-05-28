@@ -1,0 +1,327 @@
+# ================================================================
+# VÉRIFICATION DU SURAPPRENTISSAGE — 3 MÉTHODES + BOOTSTRAP
+#
+# Ces blocs s'ajoutent APRÈS le BLOC 5 BIS (TSTR XGBoost).
+# Objectif : vérifier si l'écart de 12 pts AUC entre réelle et
+# synthétique vient du surapprentissage du XGBoost ou du CTGAN.
+#
+# Méthode 1 — AUC Train vs Test (Hastie et al., 2009 ESL Ch.7)
+# Méthode 2 — Courbes d'apprentissage (Chen & Guestrin, 2016)
+# Méthode 3 — Cross-validation 5-fold (Kohavi, 1995 IJCAI)
+# Bonus    — Correction test stabilité (Breiman, 1996 bootstrap)
+# ================================================================
+
+from xgboost import XGBClassifier
+from sklearn.model_selection import StratifiedKFold, cross_val_score
+from sklearn.utils import resample
+import warnings
+warnings.filterwarnings('ignore')
+
+# ── On s'assure que COLS_NUM, COLS_CAT, medians_reel,
+#    label_encoders et encoder_fixed sont bien disponibles ────────
+# (définis dans le BLOC 5 VERSION CORRIGÉE — cell 21)
+
+print("=" * 65)
+print("VÉRIFICATION DU SURAPPRENTISSAGE — XGBoost TSTR")
+print("=" * 65)
+
+
+# ================================================================
+# MÉTHODE 1 — COMPARAISON AUC TRAIN vs AUC TEST
+#
+# Principe : pour chaque modèle, on calcule l'AUC sur ses propres
+# données d'entraînement ET sur la base réelle en test.
+# Si AUC_train >> AUC_test → le modèle a mémorisé ses données.
+#
+# Seuils de diagnostic :
+#   Gap < 3 pts  → pas de surapprentissage
+#   Gap 3-7 pts  → surapprentissage modéré
+#   Gap > 7 pts  → surapprentissage sévère ⚠️
+# ================================================================
+
+print("\n── MÉTHODE 1 : AUC Train vs Test ──────────────────────────")
+print("   (Hastie, Tibshirani, Friedman — ESL Ch.7, 2009)\n")
+
+# Jeu de test fixe : toujours la base réelle
+X_test_m1 = encoder_fixed(df_reel, COLS_NUM, COLS_CAT, medians_reel, label_encoders)
+y_test_m1  = df_reel[CIBLE]
+cols_m1    = X_test_m1.columns.tolist()
+
+resultats_m1 = {}
+for nom, df_tr in [('Réelle',       df_reel),
+                   ('Synthétique',  df_ctgan),
+                   ('Anonymisée',   df_anonyme)]:
+
+    X_tr = encoder_fixed(df_tr, COLS_NUM, COLS_CAT, medians_reel, label_encoders)
+    cols_communs = [c for c in cols_m1 if c in X_tr.columns]
+    X_tr = X_tr[cols_communs]
+    X_te = X_test_m1[cols_communs]
+    y_tr = df_tr[CIBLE]
+
+    model = XGBClassifier(n_estimators=100, max_depth=5,
+                          learning_rate=0.1, random_state=42,
+                          eval_metric='logloss', verbosity=0,
+                          use_label_encoder=False)
+    model.fit(X_tr, y_tr)
+
+    # AUC sur données d'entraînement (mesure la mémorisation)
+    auc_train = roc_auc_score(y_tr, model.predict_proba(X_tr)[:, 1])
+    # AUC sur base réelle test (mesure la vraie performance)
+    auc_test  = roc_auc_score(y_test_m1, model.predict_proba(X_te)[:, 1])
+    gap       = auc_train - auc_test
+
+    if gap < 0.03:   diagnostic = "✅ Pas de surapprentissage"
+    elif gap < 0.07: diagnostic = "⚠️  Modéré"
+    else:            diagnostic = "❌ Sévère"
+
+    resultats_m1[nom] = {'AUC_train': auc_train, 'AUC_test': auc_test,
+                         'Gap': gap, 'Diagnostic': diagnostic}
+
+    print(f"  {nom:<15}  Train={auc_train:.4f}  Test={auc_test:.4f}"
+          f"  Gap={gap:.4f}  {diagnostic}")
+
+# Conclusion méthode 1
+gap_reel = resultats_m1['Réelle']['Gap']
+print(f"\n  → Si gap_réelle ({gap_reel:.4f}) est élevé :")
+print(f"     la référence 0.8254 est surestimée par l'overfitting.")
+print(f"     Une partie de l'écart de 12pts est artificielle.")
+
+
+# ================================================================
+# MÉTHODE 2 — COURBES D'APPRENTISSAGE
+#
+# Principe : on entraîne le modèle avec de plus en plus d'arbres
+# et on trace l'AUC train et test à chaque étape.
+# Divergence entre les deux courbes = surapprentissage.
+# Le point où l'AUC test est maximale = nombre optimal d'arbres.
+# ================================================================
+
+print("\n── MÉTHODE 2 : Courbes d'apprentissage ────────────────────")
+print("   (Chen & Guestrin — XGBoost KDD 2016)\n")
+
+N_ARBRES_MAX = 300
+X_test_m2    = encoder_fixed(df_reel, COLS_NUM, COLS_CAT, medians_reel, label_encoders)
+y_test_m2    = df_reel[CIBLE]
+
+fig, axes = plt.subplots(1, 3, figsize=(16, 4.5))
+couleurs   = ['#1565C0', '#00A650', '#E65100']
+
+for idx, (nom, df_tr) in enumerate([('Réelle',      df_reel),
+                                     ('Synthétique', df_ctgan),
+                                     ('Anonymisée',  df_anonyme)]):
+    X_tr = encoder_fixed(df_tr, COLS_NUM, COLS_CAT, medians_reel, label_encoders)
+    cols_communs = [c for c in X_test_m2.columns if c in X_tr.columns]
+    X_tr = X_tr[cols_communs]
+    X_te = X_test_m2[cols_communs]
+    y_tr = df_tr[CIBLE]
+
+    model_lc = XGBClassifier(n_estimators=N_ARBRES_MAX, max_depth=5,
+                              learning_rate=0.05, random_state=42,
+                              eval_metric='auc', verbosity=0,
+                              use_label_encoder=False)
+
+    # eval_set permet à XGBoost de calculer l'AUC à chaque arbre
+    eval_set = [(X_tr, y_tr), (X_te, y_test_m2)]
+    model_lc.fit(X_tr, y_tr, eval_set=eval_set, verbose=False)
+
+    results   = model_lc.evals_result()
+    auc_train = results['validation_0']['auc']
+    auc_test  = results['validation_1']['auc']
+    epochs    = range(1, len(auc_train) + 1)
+
+    # Trouver le nombre optimal d'arbres
+    n_opt = int(np.argmax(auc_test)) + 1
+
+    ax = axes[idx]
+    ax.plot(epochs, auc_train, color=couleurs[idx], lw=1.8,
+            label='AUC Entraînement', alpha=0.9)
+    ax.plot(epochs, auc_test,  color='#C62828', lw=1.8,
+            label='AUC Test (réelle)', linestyle='--')
+    ax.axvline(x=n_opt, color='grey', lw=1.2, linestyle=':',
+               label=f'Optimal : {n_opt} arbres')
+
+    # Annotation du gap final
+    gap_final = auc_train[-1] - auc_test[-1]
+    ax.text(0.97, 0.05, f'Gap final : {gap_final:.3f}',
+            transform=ax.transAxes, ha='right', fontsize=9,
+            color='#C62828',
+            bbox=dict(boxstyle='round,pad=0.3', facecolor='#FFF0F0', alpha=0.8))
+
+    ax.set_title(f'XGBoost — {nom}', fontweight='bold', fontsize=11)
+    ax.set_xlabel("Nombre d'arbres")
+    ax.set_ylabel('AUC')
+    ax.legend(fontsize=8, frameon=False)
+    ax.set_ylim(0.60, 1.0)
+
+    print(f"  {nom:<15}  AUC test max={max(auc_test):.4f} "
+          f"à {n_opt} arbres  |  Gap final={gap_final:.4f}")
+
+plt.suptitle("Courbes d'apprentissage — Détection du surapprentissage",
+             fontweight='bold', fontsize=13, y=1.02)
+plt.tight_layout()
+plt.show()
+
+print("\n  Lecture : si la courbe train monte et que la courbe test")
+print("  se stabilise/baisse → surapprentissage à partir de N arbres.")
+
+
+# ================================================================
+# MÉTHODE 3 — CROSS-VALIDATION 5-FOLD STRATIFIÉE
+#
+# Principe : on divise les données d'entraînement en 5 parties.
+# On entraîne 5 modèles (chacun sur 4 parties, testé sur la 5ème).
+# Un écart-type élevé entre les 5 AUC = modèle instable = overfit.
+#
+# Seuils :
+#   std < 0.005 → stable ✅
+#   std 0.005-0.01 → légèrement instable
+#   std > 0.01  → instable, overfitting probable ⚠️
+# ================================================================
+
+print("\n── MÉTHODE 3 : Cross-validation 5-fold stratifiée ─────────")
+print("   (Kohavi — IJCAI 1995)\n")
+
+skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+
+for nom, df_tr in [('Réelle',      df_reel),
+                   ('Synthétique', df_ctgan),
+                   ('Anonymisée',  df_anonyme)]:
+
+    X_tr = encoder_fixed(df_tr, COLS_NUM, COLS_CAT, medians_reel, label_encoders)
+    y_tr = df_tr[CIBLE]
+
+    model_cv = XGBClassifier(n_estimators=100, max_depth=5,
+                              learning_rate=0.1, random_state=42,
+                              eval_metric='logloss', verbosity=0,
+                              use_label_encoder=False)
+
+    # cross_val_score calcule l'AUC sur chaque fold indépendamment
+    scores = cross_val_score(model_cv, X_tr, y_tr,
+                             cv=skf, scoring='roc_auc', n_jobs=-1)
+
+    if scores.std() < 0.005:   stabilite = "✅ Stable"
+    elif scores.std() < 0.01:  stabilite = "⚠️  Légèrement instable"
+    else:                       stabilite = "❌ Instable"
+
+    print(f"  {nom:<15}  AUC = {scores.mean():.4f} ± {scores.std():.4f}"
+          f"  {stabilite}")
+    print(f"               Folds : {[round(s,4) for s in scores]}")
+
+print("\n  Lecture : l'écart-type mesure la stabilité du modèle.")
+print("  Un std élevé signifie que la performance dépend fortement")
+print("  des données vues en entraînement → surapprentissage.")
+
+
+# ================================================================
+# SYNTHÈSE AUTOMATIQUE
+# ================================================================
+
+print("\n" + "=" * 65)
+print("SYNTHÈSE — DIAGNOSTIC DU SURAPPRENTISSAGE")
+print("=" * 65)
+
+gap_reel  = resultats_m1['Réelle']['Gap']
+gap_syn   = resultats_m1['Synthétique']['Gap']
+gap_anon  = resultats_m1['Anonymisée']['Gap']
+
+print(f"\n  Méthode 1 — Gap Train/Test XGBoost :")
+print(f"    Réelle      : {gap_reel:.4f}  "
+      + ("⚠️ Surapprentissage → ref 0.8254 surestimée" if gap_reel > 0.05
+         else "✅ Acceptable"))
+print(f"    Synthétique : {gap_syn:.4f}")
+print(f"    Anonymisée  : {gap_anon:.4f}")
+
+auc_reel_corrige = resultats_m1['Réelle']['AUC_test']
+auc_syn_test     = resultats_m1['Synthétique']['AUC_test']
+ecart_corrige    = auc_reel_corrige - auc_syn_test
+
+print(f"\n  Décomposition de l'écart de 12 pts :")
+print(f"    Écart brut observé       : {0.8254 - 0.7032:.4f} pts AUC")
+print(f"    Part due à l'overfitting : {gap_reel:.4f} pts "
+      f"(AUC_train_réel - AUC_test_réel)")
+print(f"    Part due au CTGAN        : ~{ecart_corrige:.4f} pts "
+      f"(écart résiduel après correction)")
+
+if gap_reel > 0.05:
+    print(f"\n  ⚠️  Conclusion : une partie de l'écart de 12 pts est")
+    print(f"     artificielle. La vraie performance du modèle réel est")
+    print(f"     {auc_reel_corrige:.4f} (AUC test), pas 0.8254 (AUC train).")
+    print(f"     Le CTGAN est responsable de ~{ecart_corrige:.4f} pts.")
+else:
+    print(f"\n  ✅ Conclusion : pas de surapprentissage significatif.")
+    print(f"     L'écart de 12 pts est entièrement dû au CTGAN.")
+
+
+# ================================================================
+# BONUS — CORRECTION DU TEST DE STABILITÉ (bootstrap)
+#
+# Ce qu'on avait fait : tester la stabilité avec random_state 0→19
+# Ce qui était faux : avec 1 seule feature, l'arbre est déterministe
+# Ce qu'on fait maintenant : tester sur des échantillons bootstrap
+# → On vérifie que les coupures [24,34,42,48] sont robustes
+#   aux variations des DONNÉES, pas du code.
+# Source : Breiman (1996) — Bagging Predictors, Machine Learning
+# ================================================================
+
+print("\n── BONUS : Correction test de stabilité (bootstrap) ───────")
+print("   (Breiman — Bagging Predictors, Machine Learning 1996)\n")
+print("   Rappel : avec 1 seule feature, random_state ne change rien.")
+print("   Le vrai test = stabilité face aux variations des données.\n")
+
+from collections import Counter
+
+N_BOOTSTRAP   = 100
+coupures_boot = []
+
+for i in range(N_BOOTSTRAP):
+    # Tirage avec remise d'un échantillon de même taille
+    df_boot = resample(df_work, n_samples=len(df_work), random_state=i)
+
+    tree_boot = DecisionTreeClassifier(
+        max_leaf_nodes=N_TRANCHES,
+        min_samples_leaf=max(50, len(df_boot) // (N_TRANCHES * 10)),
+        random_state=0  # fixe — seul le tirage bootstrap apporte le hasard
+    )
+    tree_boot.fit(df_boot[['AGE_ARRONDI']], df_boot[CIBLE])
+
+    cuts = sorted(set(
+        round(t) for t in tree_boot.tree_.threshold if t != -2
+    ))
+    coupures_boot.append(tuple(cuts))
+
+counter = Counter(coupures_boot)
+config_dominante, freq_dominante = counter.most_common(1)[0]
+
+print(f"  {N_BOOTSTRAP} échantillons bootstrap analysés :")
+for config, freq in counter.most_common(5):
+    barre = '█' * int(freq / N_BOOTSTRAP * 30)
+    print(f"  {list(config)}  {barre} {freq}/{N_BOOTSTRAP} ({freq}%)")
+
+if freq_dominante >= N_BOOTSTRAP * 0.90:
+    print(f"\n  ✅ Coupures stables sur {freq_dominante}% des échantillons.")
+    print(f"     Les seuils {list(config_dominante)} reflètent une vraie")
+    print(f"     structure statistique, pas un artefact des données.")
+else:
+    print(f"\n  ⚠️  Coupures instables — revoir min_samples_leaf.")
+
+# Graphique fréquences
+all_cuts   = [c for cuts in coupures_boot for c in cuts]
+ages_range = range(int(df_work['AGE_ARRONDI'].min()),
+                   int(df_work['AGE_ARRONDI'].max()) + 1)
+freq_par_age = {age: all_cuts.count(age) for age in ages_range if age in all_cuts}
+
+fig, ax = plt.subplots(figsize=(9, 3))
+ax.bar(list(freq_par_age.keys()), list(freq_par_age.values()),
+       color='#1565C0', alpha=0.75, width=0.8)
+for c in [24, 34, 42, 48]:
+    if c in freq_par_age:
+        ax.axvline(c, color='#E87722', lw=2, linestyle='--',
+                   label=f'Coupure {c}' if c == 24 else '')
+ax.set_xlabel("Âge de coupure")
+ax.set_ylabel(f"Fréquence sur {N_BOOTSTRAP} bootstraps")
+ax.set_title("Stabilité des coupures — Test bootstrap\n"
+             "(pic = coupure robuste aux variations des données)",
+             fontweight='bold')
+ax.legend(["Coupures [24, 34, 42, 48]"], fontsize=9, frameon=False)
+plt.tight_layout()
+plt.show()
